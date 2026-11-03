@@ -34,6 +34,7 @@ export interface CrewTask {
   briefUrl?: string;
   childOrderId?: string;
   proposals: number;
+  proposedAt?: string;
   redoRequested?: boolean;
   files: Record<string, string>;
   txHashes: Record<string, string>;
@@ -163,12 +164,27 @@ async function advance(job: Job, p: Production, task: CrewTask, brief: () => Pro
     saveJob(job);
   }
   if (task.status === "invited") {
-    const tx = await split.assign(task.subtaskId!, target, { rootOrderId: job.orderId, role: task.role });
-    task.txHashes[`propose${task.proposals ? `-${task.proposals + 1}` : ""}`] = tx.results?.[0]?.txHash ?? "";
+    // A proposal we signed earlier may still be waiting for the indexer (the panel shows DRAFT with a
+    // pending agent until then); proposing again would be refused, and is not needed.
+    const item = (await split.panel(job.orderId)).items.find((i) => i.id === task.subtaskId);
+    if (item && (item.status !== "DRAFT" || item.pendingAgent?.id === target)) {
+      task.status = "proposed";
+      task.proposedAt ??= new Date().toISOString();
+      saveJob(job);
+      return;
+    }
+    try {
+      const tx = await split.assign(task.subtaskId!, target, { rootOrderId: job.orderId, role: task.role });
+      task.txHashes[`propose${task.proposals ? `-${task.proposals + 1}` : ""}`] = tx.results?.[0]?.txHash ?? "";
+      log.info(`${job.id}: proposed ${task.role} on-chain (${tx.results?.[0]?.txHash ?? "pending"})`);
+    } catch (err) {
+      if (!/already signed|on-chain and will show/i.test(String(err))) throw err;
+      log.info(`${job.id}: ${task.role} proposal already on-chain, waiting for the indexer`);
+    }
     task.proposals += 1;
+    task.proposedAt = new Date().toISOString();
     task.status = "proposed";
     saveJob(job);
-    log.info(`${job.id}: proposed ${task.role} on-chain (${tx.results?.[0]?.txHash ?? "pending"})`);
   }
 }
 
@@ -263,7 +279,8 @@ async function waitFor(job: Job, p: Production, roles: CrewRole[], deadline: num
       const item = panel.items.find((i: SubtaskItem) => i.id === task.subtaskId);
       if (!item) continue;
       const child = item.childOrder;
-      if (task.status === "proposed" && item.status === "DRAFT") {
+      const stale = !task.proposedAt || Date.now() - Date.parse(task.proposedAt) > 15 * 60_000;
+      if (task.status === "proposed" && item.status === "DRAFT" && !item.pendingAgent && stale) {
         // Proposal declined or expired: propose again (twice at most), else give up loudly.
         task.notes.push(`proposal closed at ${new Date().toISOString()}`);
         if (task.proposals >= 3) {
