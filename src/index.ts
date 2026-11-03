@@ -27,7 +27,7 @@ const USAGE = `montage-studio <command>
   setup preview [role]                  print the listing texts and package prices without publishing
   setup samples <tiny-arms dir>         portfolio images for the listings (data/samples/<role>/)
   quote <role> '<estimate json>'        price an estimate, with the cost breakdown
-  make <role> "<brief>" ['<estimate>']  run one job locally (no marketplace) into data/<role>/jobs/local-*
+  make <role> "<brief>" ['<estimate>'] [--ref <url|file>]   run one job (no marketplace) into data/<role>/jobs/local-*
   jobs [role]                           list jobs
   mcp <runway|suno> tools [--json] | call <tool> '<json>'
   balance                               cun.ai relay spend
@@ -139,10 +139,12 @@ async function main() {
     case "make": {
       const role = roleArg(rest[0]);
       const brief = rest[1];
-      if (!brief) throw new Error('make <role> "<brief>" [\'<estimate json>\']');
+      if (!brief) throw new Error('make <role> "<brief>" [\'<estimate json>\'] [--ref <url|file> ...]');
       const spec = roleSpec(role);
       if (role === "montage") throw new Error("montage runs only against a funded order (it hires the crew through sub-tasks)");
-      const job = createJob({ role, kind: "order", id: `local-${Date.now()}`, orderId: `local:${Date.now()}`, brief, estimate: rest[2] ? (JSON.parse(rest[2]) as Record<string, unknown>) : undefined });
+      const est = rest.slice(2).find((a) => a.trim().startsWith("{"));
+      const refs = rest.flatMap((a, i) => (rest[i - 1] === "--ref" ? [a.startsWith("http") ? a : path.resolve(a)] : []));
+      const job = createJob({ role, kind: "order", id: `local-${Date.now()}`, orderId: `local:${Date.now()}`, brief, refs, estimate: est ? (JSON.parse(est) as Record<string, unknown>) : undefined });
       const plan = await spec.plan(job);
       fs.writeFileSync(path.join(job.dir, "plan.json"), JSON.stringify(plan, null, 2));
       const d = await spec.work(job, plan);

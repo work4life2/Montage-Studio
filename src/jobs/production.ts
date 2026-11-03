@@ -13,7 +13,7 @@ import type { Deliverable } from "../roles/types.js";
 import type { SketchSpec } from "../roles/sketchboard.js";
 import type { RenderSpec } from "../roles/renderfarm.js";
 import type { SongSpec } from "../roles/beatsmith.js";
-import { priceRender, RENDER_CLIP_SECONDS } from "../roles/renderfarm.js";
+import { priceRender } from "../roles/renderfarm.js";
 import { priceSong } from "../roles/beatsmith.js";
 import { sketchboard } from "../roles/sketchboard.js";
 import { saveJob, type Job } from "./store.js";
@@ -91,12 +91,10 @@ function dueAt(panel: SplitPanel, fraction: number): string {
 function crewPrices(plan: ProductionPlan) {
   const n = plan.shots.length;
   const avg = plan.shots.reduce((a, s) => a + s.seconds, 0) / Math.max(1, n);
+  const rfMusic = plan.music.source === "renderfarm" ? { music: plan.music.instrumental ? "instrumental" : "song", musicSeconds: plan.durationSec + 30, musicTakes: 2 } : {};
   return {
     sketchboard: sketchboard.price({ keyframes: n, characterSheets: plan.characters.length, aspect: plan.aspect }, { subtask: true }).price,
-    renderfarm: priceRender(
-      { shots: n, clipSeconds: avg > RENDER_CLIP_SECONDS.short - 1 ? RENDER_CLIP_SECONDS.long : RENDER_CLIP_SECONDS.short, resolution: plan.resolution, fps60: plan.fps === 60, musicBedSeconds: plan.music.source === "renderfarm" ? plan.durationSec : 0 },
-      { subtask: true },
-    ).price,
+    renderfarm: priceRender({ shots: n, secondsPerShot: avg, resolution: plan.resolution, fps60: plan.fps === 60, ...rfMusic }, { subtask: true }).price,
     beatsmith: priceSong({ generations: 2, lyrics: plan.music.instrumental ? "none" : "write" }, { subtask: true }).price,
   };
 }
@@ -130,7 +128,10 @@ function renderBrief(plan: ProductionPlan, urls: Record<string, string>): Render
     resolution: plan.resolution,
     fps60: plan.fps === 60,
     shots: plan.shots.map((s) => ({ id: s.id, seconds: s.seconds, prompt: s.motion, image: urls[s.id] })),
-    musicBed: plan.music.source === "renderfarm" ? { prompt: plan.music.style ?? "cinematic instrumental", seconds: plan.durationSec + 5 } : undefined,
+    music:
+      plan.music.source === "renderfarm"
+        ? { prompt: plan.music.style ?? "cinematic instrumental", lyrics: plan.music.instrumental ? "" : plan.music.lyrics, instrumental: Boolean(plan.music.instrumental), seconds: plan.durationSec + 30, takes: 2, title: plan.music.title ?? plan.title }
+        : undefined,
   };
 }
 
@@ -192,6 +193,13 @@ async function unzip(zipFile: string, dest: string): Promise<void> {
   if (res.code !== 0) throw new Error(`unzip ${zipFile}: ${res.stderr.slice(-300)}`);
 }
 
+/** The take to cut to: the shortest one that covers the video, else the longest. */
+async function pickTake(files: string[], durationSec: number): Promise<{ file?: string; seconds: number }> {
+  const lengths = await Promise.all(files.map(async (f) => ({ f, d: await probeDuration(f).catch(() => 0) })));
+  const fit = lengths.filter((x) => x.d >= durationSec).sort((a, b) => a.d - b.d)[0] ?? lengths.sort((a, b) => b.d - a.d)[0];
+  return { file: fit?.f, seconds: fit?.d ?? 0 };
+}
+
 /** Check a delivery against the plan. Returns what is missing (empty = accept). */
 async function review(job: Job, p: Production, task: CrewTask): Promise<string[]> {
   const plan = p.plan!;
@@ -225,18 +233,18 @@ async function review(job: Job, p: Production, task: CrewTask): Promise<string[]
       }
     }
     if (plan.music.source === "renderfarm") {
-      const bed = Object.entries(task.files).find(([n]) => /\.(wav|mp3|m4a)$/i.test(n))?.[1] ?? (fs.existsSync(path.join(dest, "music.mp3")) ? path.join(dest, "music.mp3") : undefined);
-      if (bed) p.audio = bed;
-      else problems.push("music bed missing");
+      const takes = Object.entries(task.files).filter(([n]) => /\.(wav|mp3|m4a)$/i.test(n)).map(([, f]) => f);
+      const pick = await pickTake(takes, plan.durationSec);
+      if (!pick.file) problems.push("music missing");
+      else if (pick.seconds < Math.min(15, plan.durationSec)) problems.push(`music too short (${Math.round(pick.seconds)} s)`);
+      else p.audio = pick.file;
     }
   } else if (task.role === "beatsmith") {
     const takes = Object.entries(task.files).filter(([n]) => /\.(wav|mp3|m4a|flac)$/i.test(n)).map(([, f]) => f);
     if (!takes.length) return ["no audio files"];
-    // The longest take that covers the video; Suno takes of one prompt are otherwise equivalent.
-    const lengths = await Promise.all(takes.map(async (f) => ({ f, d: await probeDuration(f).catch(() => 0) })));
-    const fit = lengths.filter((x) => x.d >= plan.durationSec).sort((a, b) => a.d - b.d)[0] ?? lengths.sort((a, b) => b.d - a.d)[0];
-    if (!fit || fit.d < Math.min(20, plan.durationSec)) problems.push(`the takes are too short for a ${plan.durationSec} s video`);
-    else p.audio = fit.f;
+    const pick = await pickTake(takes, plan.durationSec);
+    if (!pick.file || pick.seconds < Math.min(20, plan.durationSec)) problems.push(`the takes are too short for a ${plan.durationSec} s video`);
+    else p.audio = pick.file;
   }
   saveJob(job);
   return problems;
@@ -341,7 +349,7 @@ export async function runProduction(job: Job, plan: ProductionPlan): Promise<Del
     p,
     "kickoff",
     `🎬 "${plan.title}" — ${plan.logline}\n${plan.shots.length} shots, ${plan.durationSec} s, ${plan.aspect} ${plan.resolution}@${plan.fps}. ` +
-      `Crew: Sketchboard (storyboard)${plan.music.source === "beatsmith" ? ", Beatsmith (song)" : ""}, RenderFarm (renders). Briefs go out in each 1:1 thread.`,
+      `Crew: Sketchboard (storyboard)${plan.music.source === "beatsmith" ? ", Beatsmith (song)" : ""}, RenderFarm (renders${plan.music.source === "renderfarm" ? " + music" : ""}). Briefs go out in each 1:1 thread.`,
   );
 
   // Phase A: storyboard and song in parallel.
@@ -387,7 +395,7 @@ export async function runProduction(job: Job, plan: ProductionPlan): Promise<Del
     p.crew.renderfarm = {
       role: "renderfarm",
       title: "Shot renders",
-      scope: `Image-to-video renders for "${plan.title}": ${plan.shots.length} shots, ${plan.resolution} ${plan.aspect}${plan.fps === 60 ? ", enhanced to 60 fps" : ""}. Start frames (keyframe URLs) and motion prompts in brief JSON.${plan.music.source === "renderfarm" ? ` Plus an instrumental music bed of ${plan.durationSec + 5} s.` : ""} Deliver clips.zip (clips/<shot id>.mp4) + manifest.json.`,
+      scope: `Image-to-video renders for "${plan.title}": ${plan.shots.length} shots, ${plan.resolution} ${plan.aspect}${plan.fps === 60 ? ", enhanced to 60 fps" : ""}. Start frames (keyframe URLs) and motion prompts in brief JSON.${plan.music.source === "renderfarm" ? ` Plus 2 takes of ${plan.music.instrumental ? "an instrumental track" : "a song with vocals (lyrics in brief JSON)"}, ≥ ${plan.durationSec + 30} s.` : ""} Deliver clips.zip (clips/<shot id>.mp4) + manifest.json + the music takes.`,
       amount: fmt(Math.min(prices.renderfarm, Number(panel2.remaining))),
       dueAt: dueAt(panel2, 0.75),
       status: "planned",
@@ -409,7 +417,7 @@ export async function runProduction(job: Job, plan: ProductionPlan): Promise<Del
   };
   await advance(job, p, p.crew.renderfarm, async () => renderBrief(plan, p.keyframeUrls ?? {}), uploadFrames);
   await waitFor(job, p, ["renderfarm", ...(p.crew.beatsmith ? (["beatsmith"] as CrewRole[]) : [])], deadline);
-  await teamPost(job, p, "renders", `🎞️ All ${plan.shots.length} renders${p.crew.beatsmith ? " and the song" : ""} approved. Cutting to the beat now.`);
+  await teamPost(job, p, "renders", `🎞️ All ${plan.shots.length} renders${p.audio ? " and the music" : ""} approved. Cutting to the beat now.`);
 
   // Edit.
   const editDir = path.join(job.dir, "edit");
