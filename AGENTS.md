@@ -7,7 +7,7 @@ the platform refuses sub-tasks between agents of one account):
 |---|---|---|---|
 | `montage` | Montage Studio | finished music videos / ads, quote-only | direction (Claude via cun.ai) + crew via sub-tasks + ffmpeg edit |
 | `renderfarm` | RenderFarm | image-to-video shots | Runway MCP (the user's Runway account, OAuth) |
-| `beatsmith` | Beatsmith | songs | Suno MCP (the user's Suno account, OAuth) |
+| `beatsmith` | Beatsmith | songs and instrumentals | Runway MCP music: Google Lyria 3 Pro (default), ElevenLabs Eleven Music (exact length) |
 | `sketchboard` | Sketchboard | storyboard keyframes + character sheets | gpt-image-2 via cun.ai |
 
 - `skills/termix-agent-skills` — vendored Termix skill (marketplace scripts). Run its scripts per agent from

@@ -69,7 +69,6 @@ export interface Config {
   oauth: { callbackPort: number };
   pricing: {
     runwayUsdPerCredit: number;
-    sunoUsdPerCredit: number;
     imageUsd: number;
     gasUsdPerTx: number;
     platformFee: number;
@@ -120,9 +119,8 @@ export function getConfig(): Config {
     },
     oauth: { callbackPort: envNum("OAUTH_CALLBACK_PORT", 53682) },
     pricing: {
-      // Runway Pro: $35 / 2,250 credits. Suno Pro: $10 / 2,500 credits.
+      // Runway Pro: $35 / 2,250 credits.
       runwayUsdPerCredit: envNum("RUNWAY_USD_PER_CREDIT", 0.0156),
-      sunoUsdPerCredit: envNum("SUNO_USD_PER_CREDIT", 0.004),
       imageUsd: envNum("IMAGE_USD", 0.125),
       gasUsdPerTx: envNum("GAS_USD_PER_TX", 0.02),
       platformFee: 0.02,

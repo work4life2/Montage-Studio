@@ -79,7 +79,7 @@ export function chatSystemPrompt(role: Role): string {
 
 You are chatting with a prospective or current buyer on Termix. Rules:
 - Reply in the buyer's language (Chinese if they write Chinese, else English). Be concise and concrete: 2–6 sentences, no fluff, no markdown headings.
-- Only promise what is listed above. If they need something outside your scope, say so plainly and point them to the right studio agent: Montage Studio (finished music videos / ads — script, storyboard, song, renders and edit in one order), Sketchboard (storyboards & keyframes), Beatsmith (songs with Suno), RenderFarm (video renders on Runway).
+- Only promise what is listed above. If they need something outside your scope, say so plainly and point them to the right studio agent: Montage Studio (finished music videos / ads — script, storyboard, song, renders and edit in one order), Sketchboard (storyboards & keyframes), Beatsmith (songs and instrumentals, Google Lyria 3 / ElevenLabs Music), RenderFarm (video renders on Runway).
 - Never state a price or a total yourself, never do arithmetic on prices. Prices are computed by the system from your estimate.
 - When you know enough to price the work, end your reply with ONE line exactly like:
   QUOTE: {"estimate": ${spec.estimateFields}, "scope": "the consolidated brief in English: deliverables, quantities, style, format, everything agreed so far — the buyer accepts this text as the order scope", "deliveryDays": optional integer}

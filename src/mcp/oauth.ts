@@ -8,18 +8,13 @@ import { logger } from "../log.js";
 const log = logger("oauth");
 
 /**
- * The hosted MCP servers of Runway and Suno sign in with the user's own account (OAuth 2.1:
+ * Runway's hosted MCP server signs in with the user's own account (OAuth 2.1:
  * dynamic client registration + PKCE + refresh tokens). `npm run auth -- <provider>` does the
  * browser sign-in once; the service then keeps the grant alive with the refresh token stored in
  * DATA_DIR/oauth/<provider>.json. Credits are spent from that account, exactly as in the app.
  */
 export const PROVIDERS = {
   runway: { label: "Runway", mcpUrl: "https://mcp.runwayml.com/mcp", scope: "openid api:read_write" },
-  suno: {
-    label: "Suno",
-    mcpUrl: "https://api.suno.com/mcp",
-    scope: "api:v0 credits:spend download library:read library:search library:write offline_access profile:read",
-  },
 } as const;
 export type ProviderId = keyof typeof PROVIDERS;
 

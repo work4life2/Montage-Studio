@@ -20,8 +20,13 @@ export const RUNWAY = {
   enhanceCreditsPerSecond: 0.5,
   minClipSeconds: 3,
   maxClipSeconds: 15,
-  musicCredits: (seconds: number, opts: { song?: boolean } = {}) => (opts.song || seconds > 30 ? 8 : 4),
+  /** Lyria 3 Pro (full track) 8, Lyria 3 Clip (≤ 30 s) 4, Eleven Music ceil(s × 196 / 600). */
+  musicCredits: (seconds: number, opts: { song?: boolean; engine?: MusicEngine } = {}) =>
+    opts.engine === "eleven" ? Math.max(1, Math.ceil((seconds * 196) / 600)) : opts.song || seconds > 30 ? 8 : 4,
 };
+
+/** lyria = Google Lyria 3 (Pro for full tracks, Clip for short beds); eleven = ElevenLabs Eleven Music (exact length). */
+export type MusicEngine = "lyria" | "eleven";
 
 export interface RunwayResult {
   url: string;
@@ -173,19 +178,25 @@ export async function runwayEnhanceFps(i: { videoUrl: string; taskId?: string; f
   return { ...r, credits: r.credits ?? Math.max(1, Math.ceil(i.seconds / 2)) };
 }
 
-/** Music: a song with vocals (lyrics in the prompt) or an instrumental bed. Lyria 3 Pro for full tracks, Lyria 3 Clip for short beds. */
-export async function runwayMusic(i: { prompt: string; seconds: number; lyrics?: string; instrumental?: boolean; title?: string; ledger?: TaskLedger; key?: string }): Promise<RunwayResult> {
+/**
+ * Music: a song with vocals (lyrics in the prompt) or an instrumental. Lyria 3 Pro for full tracks,
+ * Lyria 3 Clip for short beds; Eleven Music when the length must be exact (3–600 s).
+ */
+export async function runwayMusic(i: { prompt: string; seconds: number; lyrics?: string; instrumental?: boolean; title?: string; engine?: MusicEngine; ledger?: TaskLedger; key?: string }): Promise<RunwayResult> {
   const song = Boolean(i.lyrics && !i.instrumental);
-  const model = song || i.seconds > 30 ? "lyria-3-pro" : "lyria-3-clip";
-  const promptText = [i.prompt, song ? `Lyrics:\n${i.lyrics}` : "Instrumental, no vocals.", `Length: at least ${Math.round(i.seconds)} seconds.`].join("\n\n").slice(0, 5000);
+  const eleven = i.engine === "eleven";
+  const seconds = Math.min(600, Math.max(3, Math.round(i.seconds)));
+  const model = eleven ? "eleven-music-v2.5" : song || i.seconds > 30 ? "lyria-3-pro" : "lyria-3-clip";
+  const promptText = [i.prompt, song ? `Lyrics:\n${i.lyrics}` : "Instrumental, no vocals.", eleven ? "" : `Length: at least ${seconds} seconds.`].filter(Boolean).join("\n\n").slice(0, 5000);
+  const extra = eleven ? { durationSeconds: seconds, ...(song ? {} : { forceInstrumental: true }) } : {};
   const taskId = await startOrResume(i.ledger, i.key, async () => {
-    const start = await call("generate_music", { promptText, model, ...(i.title ? { name: i.title.slice(0, 200) } : {}), confirmRepeat: true });
+    const start = await call("generate_music", { promptText, model, ...extra, ...(i.title ? { name: i.title.slice(0, 200) } : {}), confirmRepeat: true });
     const id = taskIdOf(start.json, start.text);
     log.info(`music task ${id} (${model})`);
     return id;
   });
   const r = await waitTask(taskId, "audio", 15 * 60_000);
-  return { ...r, credits: r.credits ?? RUNWAY.musicCredits(i.seconds, { song }) };
+  return { ...r, credits: r.credits ?? RUNWAY.musicCredits(seconds, { song, engine: i.engine }) };
 }
 
 /** Remaining credits of the connected workspace (whoami). */

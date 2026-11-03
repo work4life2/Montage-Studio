@@ -20,7 +20,7 @@ const USAGE = `montage-studio <command>
 
   serve                                 host every agent in SERVE_ROLES (default: all four) and take orders
   doctor                                check tools, keys, accounts and wallets
-  auth <runway|suno> | auth status      sign in with the account once (browser); refresh token kept in data/oauth/
+  auth runway | auth status             sign in with the account once (browser); refresh token kept in data/oauth/
   setup venv                            python venv with librosa for beat detection (data/venv)
   setup covers [--force]                generate the listing covers (cun.ai, gpt-image-2)
   setup listing <role|all> [--update]   publish (or update) the listings; prices are computed cost-plus
@@ -29,7 +29,7 @@ const USAGE = `montage-studio <command>
   quote <role> '<estimate json>'        price an estimate, with the cost breakdown
   make <role> "<brief>" ['<estimate>'] [--ref <url|file>]   run one job (no marketplace) into data/<role>/jobs/local-*
   jobs [role]                           list jobs
-  mcp <runway|suno> tools [--json] | call <tool> '<json>'
+  mcp runway tools [--json] | call <tool> '<json>'
   balance                               cun.ai relay spend
 
 Roles: ${ROLES.join(", ")}
@@ -76,7 +76,7 @@ async function main() {
     }
     case "mcp": {
       const [p, sub, name, json] = rest;
-      if (!p || !isProvider(p)) throw new Error("mcp <runway|suno> tools|call");
+      if (!p || !isProvider(p)) throw new Error("mcp runway tools|call");
       if (sub === "tools") {
         const tools = await mcp(p).listTools();
         if (rest.includes("--json")) process.stdout.write(JSON.stringify(tools, null, 2) + "\n");
@@ -88,7 +88,7 @@ async function main() {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
         return;
       }
-      throw new Error("mcp <runway|suno> tools|call <tool> '<json>'");
+      throw new Error("mcp runway tools|call <tool> '<json>'");
     }
     case "setup": {
       const sub = rest[0];
@@ -124,7 +124,7 @@ async function main() {
         return;
       }
       printChecks(await runDoctor({ network: true }));
-      process.stdout.write(`\nNext: npm run setup -- venv · npm run auth -- runway · npm run auth -- suno · npm run setup -- listing all · npm start\n`);
+      process.stdout.write(`\nNext: npm run setup -- venv · npm run auth -- runway · npm run setup -- listing all · npm start\n`);
       return;
     }
     case "quote": {

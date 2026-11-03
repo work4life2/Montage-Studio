@@ -1,10 +1,10 @@
 import { asAspect, type Aspect } from "../media/util.js";
+import { getConfig } from "../config.js";
 import { costPlus, gasLine, llmLine, num } from "../pricing.js";
 import { chatJson } from "../relay.js";
 import { runProduction } from "../jobs/production.js";
 import type { Job } from "../jobs/store.js";
 import { priceSong } from "./beatsmith.js";
-import { loadGrant } from "../mcp/oauth.js";
 import { priceRender } from "./renderfarm.js";
 import { MAX_FRAMES, sketchboard, type Character } from "./sketchboard.js";
 import type { PriceLine, RoleSpec } from "./types.js";
@@ -33,7 +33,7 @@ export interface ProductionPlan {
   characters: Character[];
   shots: PlanShot[];
   music: {
-    /** beatsmith = original song (Suno); renderfarm = instrumental bed from Runway; buyer = they send a track; none = silent. */
+    /** beatsmith = original song with vocals; renderfarm = instrumental bed; buyer = they send a track; none = silent. */
     source: "beatsmith" | "renderfarm" | "buyer" | "none";
     title?: string;
     style?: string;
@@ -48,12 +48,12 @@ export interface ProductionPlan {
 }
 
 /**
- * Who makes the music. A song with vocals goes to Beatsmith (Suno) when the Suno account is connected;
- * everything else — and songs while Suno is not connected — goes to RenderFarm (Runway music), which
- * saves a crew member and a sub-task.
+ * Who makes the music. A song with vocals goes to Beatsmith (it writes the lyrics and delivers takes to
+ * choose from) whenever this process hosts it; instrumental beds — and songs when Beatsmith is not
+ * hosted — go to RenderFarm, which saves a crew member and a sub-task.
  */
 export function musicBy(music: string): "beatsmith" | "renderfarm" | "none" {
-  if (music === "song" && loadGrant("suno")?.refreshToken) return "beatsmith";
+  if (music === "song" && getConfig().serveRoles.includes("beatsmith")) return "beatsmith";
   if (music === "song" || music === "instrumental") return "renderfarm";
   return "none";
 }
@@ -73,7 +73,7 @@ export function crewFor(e: Record<string, unknown>) {
     { shots, secondsPerShot: durationSec / shots, resolution, fps60, ...(by === "renderfarm" ? { music, musicSeconds: durationSec + 30, musicTakes: 2 } : {}) },
     { subtask: true },
   );
-  const song = by === "beatsmith" ? priceSong({ generations: 2, lyrics: "write" }, { subtask: true }) : undefined;
+  const song = by === "beatsmith" ? priceSong({ takes: 2, engine: "lyria", lyrics: "write" }, { subtask: true }) : undefined;
   return { durationSec, shots, sheets, aspect, music, musicBy: by, fps60, resolution, sketch, render, song };
 }
 
@@ -83,7 +83,7 @@ function priceMontage(e: Record<string, unknown>, opts: { subtask?: boolean } = 
   const lines: PriceLine[] = [
     { item: `Sketchboard: ${c.shots} keyframes + ${c.sheets} sheets`, usd: c.sketch.price },
     { item: `RenderFarm: ${c.shots} shots${c.fps60 ? " @60fps" : ""}${c.musicBy === "renderfarm" ? ` + ${c.music}` : ""}`, usd: c.render.price },
-    ...(c.song ? [{ item: "Beatsmith: original song (2 Suno generations)", usd: c.song.price }] : []),
+    ...(c.song ? [{ item: "Beatsmith: original song (2 takes)", usd: c.song.price }] : []),
     llmLine("direction: treatment, lyrics, shot list", 20_000, 12_000),
     llmLine("buyer chat + reviews", 30_000 + 1500 * c.shots, 6000),
     { item: "edit + encode (server time)", usd: 0.1 + 0.005 * c.durationSec },
@@ -94,7 +94,7 @@ function priceMontage(e: Record<string, unknown>, opts: { subtask?: boolean } = 
 }
 
 const RUNWAY_TIPS = `Image-to-video prompts (motion): describe only the action and the camera, never the look (the keyframe already fixes it). Put the key action first ("Immediately: …") — it must happen in the first 2 seconds, because only 1–4 s of each clip are used. Small, clear actions survive; crowds of simultaneous actions collapse. No on-screen text.`;
-const SUNO_TIPS = `Suno lyrics: use section tags in square brackets ([Intro], [Verse 1], [Chorus], [Bridge], [Outro]); performance cues also go in square brackets ([Spoken], [Whispered]); NEVER put anything in parentheses — Suno sings it. Keep the song roughly 30–60 s longer than the video so the edit can pick the best part.`;
+const LYRIC_TIPS = `Song lyrics: use section tags in square brackets ([Intro], [Verse 1], [Chorus], [Bridge], [Outro]); performance cues also go in square brackets ([Spoken], [Whispered]); NEVER put anything in parentheses — it gets sung. Keep the song roughly 30–60 s longer than the video so the edit can pick the best part.`;
 
 export async function direct(job: Job): Promise<ProductionPlan> {
   const e = job.estimate ?? {};
@@ -105,21 +105,21 @@ export async function direct(job: Job): Promise<ProductionPlan> {
         role: "system",
         content:
           "You are the director at Montage Studio, a music-video and ad studio run by AI agents. You write the treatment, the lyrics and a shot list timed to the music, " +
-          "then your crew draws the keyframes (Sketchboard, gpt-image-2), renders each shot image-to-video (RenderFarm, Runway) and writes the song (Beatsmith, Suno). " +
+          "then your crew draws the keyframes (Sketchboard, gpt-image-2), renders each shot image-to-video (RenderFarm, Runway) and writes the song (Beatsmith, Google Lyria 3 / ElevenLabs Music). " +
           "Everything that appears on screen (titles, captions, lyrics, names) is in the language of the buyer's brief unless they asked otherwise; prompts for the crew are in English.\n\n" +
-          `${RUNWAY_TIPS}\n${SUNO_TIPS}\nKeyframe prompts (description): a complete still-image prompt — characters by their defined names, setting, action frozen at its most telling instant, camera angle, lighting. Never ask for text in the image.`,
+          `${RUNWAY_TIPS}\n${LYRIC_TIPS}\nKeyframe prompts (description): a complete still-image prompt — characters by their defined names, setting, action frozen at its most telling instant, camera angle, lighting. Never ask for text in the image.`,
       },
       {
         role: "user",
         content:
           `Brief (with the conversation that led to the order; the agreed scope is binding):\n${job.brief}\n\n` +
           `Agreed production size (do not exceed): ${c.durationSec} s, exactly ${c.shots} shots, up to ${c.sheets} recurring characters with model sheets, aspect ${c.aspect}, ${c.resolution}, ${c.fps60 ? 60 : 24} fps. ` +
-          `Music: ${c.music === "song" ? `an original song with vocals (${c.musicBy === "beatsmith" ? "Beatsmith, Suno" : "RenderFarm, Runway music"})` : c.music === "instrumental" ? "an instrumental track (RenderFarm, Runway music)" : c.music === "buyer" ? "the buyer's own track (look for its URL in the brief)" : "none"}.\n\n` +
+          `Music: ${c.music === "song" ? `an original song with vocals (${c.musicBy === "beatsmith" ? "Beatsmith" : "RenderFarm, Runway music"})` : c.music === "instrumental" ? "an instrumental track (RenderFarm, Runway music)" : c.music === "buyer" ? "the buyer's own track (look for its URL in the brief)" : "none"}.\n\n` +
           `Reply with JSON only:\n{"title": string, "logline": string, "aspect": "${c.aspect}", "durationSec": ${c.durationSec}, "resolution": "${c.resolution}", "fps": ${c.fps60 ? 60 : 24}, ` +
           `"style": "one-sentence art direction shared by every keyframe", ` +
           `"characters": [{"id": "kebab-id", "name": "DISPLAY NAME", "description": "full visual description"}], ` +
           `"shots": [{"id": "s01", "seconds": number (1.5-6, all shots sum to durationSec), "description": "keyframe prompt", "motion": "image-to-video prompt", "characters": ["kebab-id"], "caption": "optional on-screen text, short"}], ` +
-          `"music": {"source": "beatsmith"|"renderfarm"|"buyer"|"none", "title": string, "style": "genre, tempo in BPM, instruments, vocal type, mood — Suno style prompt", "lyrics": "full lyrics with [section] tags, or empty for instrumental", "instrumental": boolean, "bpm": number, "url": "buyer track URL if any"}, ` +
+          `"music": {"source": "beatsmith"|"renderfarm"|"buyer"|"none", "title": string, "style": "genre, tempo in BPM, instruments, vocal type, mood — music-model style prompt", "lyrics": "full lyrics with [section] tags, or empty for instrumental", "instrumental": boolean, "bpm": number, "url": "buyer track URL if any"}, ` +
           `"titleText": "optional title shown over the first shot", "endText": "optional end text (brand, CTA, URL)"}`,
       },
     ],
@@ -142,7 +142,7 @@ export const montage: RoleSpec<ProductionPlan> = {
   role: "montage",
   name: "Montage Studio",
   persona: `You are Montage Studio, a music-video and ad production studio on the Termix marketplace (agent.family), run by AI agents.
-One order gets the buyer a finished video: you write the treatment, the lyrics and a shot list timed to the beat (you are the director), then hire your crew through Termix sub-tasks — Sketchboard draws the storyboard keyframes and character sheets (gpt-image-2), RenderFarm renders every shot image-to-video and makes the music (Runway), Beatsmith writes and produces songs with Suno when the project calls for it — and you cut it to the beat, add titles and deliver the master.
+One order gets the buyer a finished video: you write the treatment, the lyrics and a shot list timed to the beat (you are the director), then hire your crew through Termix sub-tasks — Sketchboard draws the storyboard keyframes and character sheets (gpt-image-2), RenderFarm renders every shot image-to-video (Runway) and makes instrumental beds, Beatsmith writes and produces the songs with vocals (Google Lyria 3 / ElevenLabs Music) — and you cut it to the beat, add titles and deliver the master.
 - Deliverables: H.264 master (1080p or 720p; 16:9, 9:16 or 1:1; 24 or 60 fps) with the song mixed at streaming loudness, a 720p preview, the song file, the storyboard contact sheet and the production notes (shot list, lyrics).
 - Length: 10 s to 3 min. Typical: a 30–60 s ad or a 60–120 s music video. 2–5 s per shot.
 - Styles: 3D animation, anime, comic, painterly, photoreal cinematic. Music: any genre; original song with vocals, instrumental, or the buyer's own track.
@@ -164,7 +164,7 @@ Every project is quoted from its parameters (length, number of shots, characters
   listing: {
     title: "Custom AI music video or ad, start to finish (Montage Studio)",
     skillTag: "music-video-production",
-    tags: ["music-video", "video-ad", "animation", "video-editing", "suno", "runway", "storyboard", "ai-video"],
+    tags: ["music-video", "video-ad", "animation", "video-editing", "ai-music", "runway", "storyboard", "ai-video"],
     coverAlt: "A music-video editing suite with a beat-synced timeline",
     instantBuyable: false,
     publishPackages: false,
@@ -172,7 +172,7 @@ Every project is quoted from its parameters (length, number of shots, characters
 • Direction (us): treatment, lyrics and a shot list timed to the beat
 • Storyboard: Sketchboard draws character sheets + one keyframe per shot (gpt-image-2)
 • Shots: RenderFarm renders every keyframe image-to-video on Runway (Kling 4), enhanced to 60 fps
-• Music: an original song with vocals or an instrumental (RenderFarm on Runway, or Beatsmith with Suno) — or your own track
+• Music: an original song with vocals or an instrumental (Beatsmith or RenderFarm, Google Lyria 3 / ElevenLabs Music) — or your own track
 • Edit (us): cut to the beat, titles, loudness-mastered mix
 
 You receive: the H.264 master (1080p, 16:9 / 9:16 / 1:1), a 720p preview, the song, the storyboard contact sheet and the production notes.

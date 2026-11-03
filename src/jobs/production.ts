@@ -96,7 +96,7 @@ function crewPrices(plan: ProductionPlan) {
   return {
     sketchboard: sketchboard.price({ keyframes: n, characterSheets: plan.characters.length, aspect: plan.aspect }, { subtask: true }).price,
     renderfarm: priceRender({ shots: n, secondsPerShot: avg, resolution: plan.resolution, fps60: plan.fps === 60, ...rfMusic }, { subtask: true }).price,
-    beatsmith: priceSong({ generations: 2, lyrics: plan.music.instrumental ? "none" : "write" }, { subtask: true }).price,
+    beatsmith: priceSong({ takes: 2, engine: "lyria", lyrics: plan.music.instrumental ? "none" : "write" }, { subtask: true }).price,
   };
 }
 
@@ -118,7 +118,8 @@ function songBrief(plan: ProductionPlan): SongSpec {
     instrumental: Boolean(plan.music.instrumental),
     bpm: plan.music.bpm,
     minSeconds: Math.ceil(plan.durationSec + 15),
-    generations: 2,
+    takes: 2,
+    engine: "lyria",
   };
 }
 
@@ -388,7 +389,7 @@ export async function runProduction(job: Job, plan: ProductionPlan): Promise<Del
     p.crew.beatsmith = {
       role: "beatsmith",
       title: plan.music.instrumental ? "Instrumental track" : "Original song",
-      scope: `${plan.music.instrumental ? "Instrumental" : "Original song"} for "${plan.title}" with Suno: ${plan.music.style ?? ""}${plan.music.bpm ? `, ~${plan.music.bpm} BPM` : ""}, at least ${Math.ceil(plan.durationSec + 15)} s. ${plan.music.instrumental ? "" : "Lyrics in brief JSON. "}2 generations. Deliver every take as audio + manifest.json.`,
+      scope: `${plan.music.instrumental ? "Instrumental" : "Original song"} for "${plan.title}" : ${plan.music.style ?? ""}${plan.music.bpm ? `, ~${plan.music.bpm} BPM` : ""}, at least ${Math.ceil(plan.durationSec + 15)} s. ${plan.music.instrumental ? "" : "Lyrics in brief JSON. "}2 takes. Deliver every take as audio + manifest.json.`,
       amount: fmt(prices.beatsmith),
       dueAt: dueAt(panel, 0.35),
       status: "planned",

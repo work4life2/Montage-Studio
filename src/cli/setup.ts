@@ -65,7 +65,7 @@ function samplesDir(role: Role) {
 
 /**
  * Portfolio images from the TINY ARMS ad (termix-aacp/packages/e2e/demos/tiny-arms), made with the same
- * tools the agents use: gpt-image-2 keyframes, Runway renders, a Suno song, a beat-synced cut.
+ * tools the agents use: gpt-image-2 keyframes, Runway renders, an AI song, a beat-synced cut.
  */
 export async function prepareSamples(tinyArms: string): Promise<void> {
   const frame = async (src: string, at: number, out: string) => {
