@@ -7,7 +7,7 @@ import { mcp } from "./mcp/client.js";
 import { authorize, isProvider, loadGrant, PROVIDERS } from "./mcp/oauth.js";
 import { generateCovers } from "./cli/covers.js";
 import { printChecks, runDoctor } from "./cli/doctor.js";
-import { listingsSetup, previewListings } from "./cli/setup.js";
+import { listingsSetup, prepareSamples, previewListings } from "./cli/setup.js";
 import { formatBreakdown } from "./pricing.js";
 import { relayBalance } from "./relay.js";
 import { roleSpec } from "./roles/index.js";
@@ -25,6 +25,7 @@ const USAGE = `montage-studio <command>
   setup covers [--force]                generate the listing covers (cun.ai, gpt-image-2)
   setup listing <role|all> [--update]   publish (or update) the listings; prices are computed cost-plus
   setup preview [role]                  print the listing texts and package prices without publishing
+  setup samples <tiny-arms dir>         portfolio images for the listings (data/samples/<role>/)
   quote <role> '<estimate json>'        price an estimate, with the cost breakdown
   make <role> "<brief>" ['<estimate>']  run one job locally (no marketplace) into data/<role>/jobs/local-*
   jobs [role]                           list jobs
@@ -98,6 +99,11 @@ async function main() {
       if (sub === "listing") {
         const which = rest[1] ?? "all";
         await listingsSetup(which === "all" ? [...ROLES] : [roleArg(which)], rest.includes("--update"));
+        return;
+      }
+      if (sub === "samples") {
+        if (!rest[1]) throw new Error("setup samples <path to termix-aacp/packages/e2e/demos/tiny-arms>");
+        await prepareSamples(path.resolve(rest[1]));
         return;
       }
       if (sub === "preview") {

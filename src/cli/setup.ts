@@ -54,6 +54,74 @@ export function listingBody(role: Role) {
   };
 }
 
+interface Sample {
+  file: string;
+  alt: string;
+}
+
+function samplesDir(role: Role) {
+  return path.join(getConfig().dataDir, "samples", role);
+}
+
+/**
+ * Portfolio images from the TINY ARMS ad (termix-aacp/packages/e2e/demos/tiny-arms), made with the same
+ * tools the agents use: gpt-image-2 keyframes, Runway renders, a Suno song, a beat-synced cut.
+ */
+export async function prepareSamples(tinyArms: string): Promise<void> {
+  const frame = async (src: string, at: number, out: string) => {
+    const r = await run("ffmpeg", ["-v", "error", "-y", "-ss", String(at), "-i", src, "-frames:v", "1", "-q:v", "3", out], { timeoutMs: 120_000 });
+    if (r.code !== 0) throw new Error(`frame ${src}@${at}: ${r.stderr}`);
+  };
+  const still = async (src: string, out: string) => {
+    const r = await run("ffmpeg", ["-v", "error", "-y", "-i", src, "-vf", "scale='min(1920,iw)':-2", "-q:v", "3", out], { timeoutMs: 120_000 });
+    if (r.code !== 0) throw new Error(`still ${src}: ${r.stderr}`);
+  };
+  const plan: Record<Role, Array<{ alt: string; make: (out: string) => Promise<void> }>> = {
+    montage: [13, 33, 43, 48, 68, 83].map((t, i) => ({
+      alt: ["TINY ARMS music video: the T-Rex orders with his snout", "TINY ARMS: the agent accepts the job", "TINY ARMS: the party is delivered", "TINY ARMS: tiny arms cannot reach the cake", "TINY ARMS: the goldfish juror", "TINY ARMS: the final dance"][i],
+      make: (out) => frame(path.join(tinyArms, "final", "tiny-arms-1080p60.mp4"), t, out),
+    })),
+    sketchboard: [
+      ...["s04", "s08", "s10", "s14", "s17", "s22"].map((id) => ({ alt: `TINY ARMS storyboard keyframe ${id}`, make: (out: string) => still(path.join(tinyArms, "keyframes-16x9", `${id}.png`), out) })),
+      ...["rex", "bao"].map((id) => ({ alt: `Character model sheet: ${id === "rex" ? "Mr. Rex" : "BAO"}`, make: (out: string) => still(path.join(tinyArms, "refs", `${id}.png`), out) })),
+    ],
+    renderfarm: ["s05", "s09", "s12", "s16", "s21", "s24"].map((id) => ({ alt: `Runway render, TINY ARMS shot ${id} (60 fps)`, make: (out: string) => frame(path.join(tinyArms, "runway", "clips60", `${id}-v1.mp4`), 2, out) })),
+    beatsmith: [],
+  };
+  for (const role of ROLES) {
+    const dir = samplesDir(role);
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (!plan[role].length) continue;
+    fs.mkdirSync(dir, { recursive: true });
+    const list: Sample[] = [];
+    for (const [i, s] of plan[role].entries()) {
+      const out = path.join(dir, `${String(i + 1).padStart(2, "0")}.jpg`);
+      await s.make(out);
+      list.push({ file: out, alt: s.alt.slice(0, 160) });
+    }
+    fs.writeFileSync(path.join(dir, "samples.json"), JSON.stringify(list, null, 2));
+    process.stdout.write(`${role}: ${list.length} sample(s) in ${dir}\n`);
+  }
+}
+
+async function uploadSamples(role: Role): Promise<Array<{ src: string; alt: string }>> {
+  const file = path.join(samplesDir(role), "samples.json");
+  if (!fs.existsSync(file)) return [];
+  const t = termix(role);
+  const out: Array<{ src: string; alt: string }> = [];
+  for (const s of (JSON.parse(fs.readFileSync(file, "utf8")) as Sample[]).slice(0, 12)) {
+    const up = await t.api<{ uploadUrl: string; publicUrl?: string; url?: string }>("POST", "/api/v1/listings/media/upload-url", {
+      fileName: path.basename(s.file),
+      contentType: "image/jpeg",
+      sizeBytes: fs.statSync(s.file).size,
+      purpose: "sample",
+    });
+    await t.upload(up.uploadUrl, s.file, "image/jpeg");
+    out.push({ src: (up.publicUrl ?? up.url)!, alt: s.alt });
+  }
+  return out;
+}
+
 /** Create + publish (or update) the role's listing with its generated cover. */
 export async function publishListing(role: Role, opts: { update?: boolean } = {}): Promise<string> {
   const t = termix(role);
@@ -72,7 +140,8 @@ export async function publishListing(role: Role, opts: { update?: boolean } = {}
     purpose: "cover",
   });
   await t.upload(up.uploadUrl, jpg, "image/jpeg");
-  const body = { ...listingBody(role), coverImageUrl: up.publicUrl ?? up.url };
+  const samples = await uploadSamples(role);
+  const body = { ...listingBody(role), coverImageUrl: up.publicUrl ?? up.url, ...(samples.length ? { samples } : {}) };
   const existing = getConfig().agents[role].listingId || savedListings()[role];
   if (existing && opts.update) {
     const { category: _c, currency: _cur, ...patch } = body;
