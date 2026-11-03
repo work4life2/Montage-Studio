@@ -163,9 +163,10 @@ export async function editToBeat(input: EditInput): Promise<EditResult> {
   }
   const planned = input.shots.reduce((a, s) => a + s.seconds, 0);
   let total = Math.min(input.targetSec ?? planned, audioDur);
-  // End on a downbeat when one is near, so the music fade lands on the bar.
+  // End on a downbeat so the music fade lands on the bar: the first one at or just past the wanted
+  // length (never more than half a second short of it, at most 2 s over), when the song is long enough.
   if (beats?.downbeats.length) {
-    const near = beats.downbeats.filter((b) => Math.abs(b - total) <= 2).sort((a, b) => Math.abs(a - total) - Math.abs(b - total))[0];
+    const near = beats.downbeats.filter((b) => b >= total - 0.5 && b <= Math.min(total + 2, audioDur)).sort((a, b) => a - b)[0];
     if (near && near > 2) total = near;
   }
   const bounds = cutPoints(
