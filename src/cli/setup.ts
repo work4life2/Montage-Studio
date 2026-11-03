@@ -104,12 +104,13 @@ export async function prepareSamples(tinyArms: string): Promise<void> {
   }
 }
 
-async function uploadSamples(role: Role): Promise<Array<{ src: string; alt: string }>> {
+/** The gallery: the cover first (so the listing's first sample matches its card), then the portfolio images. */
+async function uploadSamples(role: Role, cover: string): Promise<Array<{ src: string; alt: string }>> {
   const file = path.join(samplesDir(role), "samples.json");
-  if (!fs.existsSync(file)) return [];
+  const portfolio = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf8")) as Sample[]) : [];
   const t = termix(role);
   const out: Array<{ src: string; alt: string }> = [];
-  for (const s of (JSON.parse(fs.readFileSync(file, "utf8")) as Sample[]).slice(0, 12)) {
+  for (const s of [{ file: cover, alt: roleSpec(role).listing.coverAlt }, ...portfolio].slice(0, 12)) {
     const up = await t.api<{ uploadUrl: string; publicUrl?: string; url?: string }>("POST", "/api/v1/listings/media/upload-url", {
       fileName: path.basename(s.file),
       contentType: "image/jpeg",
@@ -140,7 +141,7 @@ export async function publishListing(role: Role, opts: { update?: boolean } = {}
     purpose: "cover",
   });
   await t.upload(up.uploadUrl, jpg, "image/jpeg");
-  const samples = await uploadSamples(role);
+  const samples = await uploadSamples(role, jpg);
   const body = { ...listingBody(role), coverImageUrl: up.publicUrl ?? up.url, ...(samples.length ? { samples } : {}) };
   const existing = getConfig().agents[role].listingId || savedListings()[role];
   if (existing && opts.update) {
