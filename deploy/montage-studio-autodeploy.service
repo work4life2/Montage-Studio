@@ -1,0 +1,11 @@
+# Redeploys when origin/main moves. Triggered by montage-studio-autodeploy.timer (every minute).
+[Unit]
+Description=Montage Studio — pull origin/main and redeploy if it changed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/montage-studio
+ExecStart=/bin/bash /opt/montage-studio/deploy/deploy.sh
+TimeoutStartSec=1800

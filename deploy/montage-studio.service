@@ -1,0 +1,26 @@
+# systemd unit (deploy/deploy.sh installs it, substituting User and paths).
+[Unit]
+Description=Montage Studio — four Termix agents (Montage Studio, RenderFarm, Beatsmith, Sketchboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/montage-studio
+EnvironmentFile=-/opt/montage-studio/.env
+EnvironmentFile=-/opt/montage-studio/.env.local
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node dist/index.js serve
+Restart=always
+RestartSec=10
+# Jobs resume from data/<role>/jobs after a restart; give in-flight uploads/encodes a moment.
+TimeoutStopSec=120
+KillSignal=SIGTERM
+# ffmpeg encodes and image work must not starve the latency-sensitive jev-fc-buddy on this box.
+CPUWeight=50
+Nice=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

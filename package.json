@@ -1,0 +1,27 @@
+{
+  "name": "montage-studio",
+  "version": "0.1.0",
+  "description": "Four Termix agents in one service: Montage Studio (music-video production, splits work to its crew), RenderFarm (Runway), Beatsmith (Suno) and Sketchboard (storyboard keyframes).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js serve",
+    "serve": "node dist/index.js serve",
+    "setup": "node dist/index.js setup",
+    "auth": "node dist/index.js auth",
+    "mcp": "node dist/index.js mcp",
+    "doctor": "node dist/index.js doctor",
+    "jobs": "node dist/index.js jobs",
+    "make": "node dist/index.js make",
+    "quote": "node dist/index.js quote",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "typescript": "^5.9.3"
+  }
+}

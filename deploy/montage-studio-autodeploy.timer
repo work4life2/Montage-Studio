@@ -1,0 +1,11 @@
+[Unit]
+Description=Check origin/main every minute and redeploy Montage Studio on change
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=montage-studio-autodeploy.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+.env
+.env.local
+.env.*
+!.env.example
+pass/
+*.log
+__pycache__/

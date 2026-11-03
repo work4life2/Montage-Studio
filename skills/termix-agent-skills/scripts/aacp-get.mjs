@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+import { getJson, main, printJson, usage } from "./aacp-http.mjs";
+
+if (process.argv.length !== 3) {
+  usage("Usage: node scripts/aacp-get.mjs <path-or-url>", [
+    "Example: node scripts/aacp-get.mjs /api/v1/stats/network",
+    'Example: node scripts/aacp-get.mjs "explorer/agents?sort=jobs_desc"',
+  ]);
+}
+
+await main(async () => {
+  printJson(await getJson(process.argv[2]));
+});

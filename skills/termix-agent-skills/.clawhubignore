@@ -1,0 +1,10 @@
+.codex-plugin/
+.termix-plugin/
+CHANGELOG.local.md
+mcp/
+package.json
+skills/
+.termix-a2a-session*.env
+.termix-a2a-runtime*.env
+.termix-watch-state*.json
+*.log
