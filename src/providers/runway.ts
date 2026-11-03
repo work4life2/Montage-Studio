@@ -29,6 +29,26 @@ export interface RunwayResult {
   taskId?: string;
 }
 
+/**
+ * Task bookkeeping for one job: a task id is recorded the moment Runway accepts it, so a restart
+ * polls the task it already paid for instead of submitting (and paying for) it again.
+ */
+export interface TaskLedger {
+  get(key: string): string | undefined;
+  set(key: string, taskId: string): void;
+}
+
+async function startOrResume(ledger: TaskLedger | undefined, key: string | undefined, start: () => Promise<string>): Promise<string> {
+  const known = ledger && key ? ledger.get(key) : undefined;
+  if (known) {
+    log.info(`resuming Runway task ${known} (${key})`);
+    return known;
+  }
+  const id = await start();
+  if (ledger && key) ledger.set(key, id);
+  return id;
+}
+
 const RATIONALE = "Montage Studio's RenderFarm agent: rendering a paid client order on the Termix marketplace";
 
 function rawLog(tool: string, r: McpCallResult) {
@@ -118,41 +138,52 @@ function clipLength(seconds: number): number {
   return Math.min(RUNWAY.maxClipSeconds, Math.max(RUNWAY.minClipSeconds, Math.round(seconds)));
 }
 
-export async function runwayImageToVideo(i: { image: string; prompt: string; seconds: number; aspect: Aspect; resolution: "720p" | "1080p" }): Promise<RunwayResult> {
-  const url = await runwayAsset(i.image);
+export async function runwayImageToVideo(i: { image: string; prompt: string; seconds: number; aspect: Aspect; resolution: "720p" | "1080p"; ledger?: TaskLedger; key?: string }): Promise<RunwayResult> {
   const duration = clipLength(i.seconds);
-  const start = await call("generate_video", { model: VIDEO_MODEL, promptText: i.prompt.slice(0, 3400), startFrame: { url }, ratio: i.aspect, duration, resolution: i.resolution });
-  const taskId = taskIdOf(start.json, start.text);
-  log.info(`i2v task ${taskId} (${VIDEO_MODEL}, ${duration}s ${i.resolution})`);
+  const taskId = await startOrResume(i.ledger, i.key, async () => {
+    const url = await runwayAsset(i.image);
+    const start = await call("generate_video", { model: VIDEO_MODEL, promptText: i.prompt.slice(0, 3400), startFrame: { url }, ratio: i.aspect, duration, resolution: i.resolution });
+    const id = taskIdOf(start.json, start.text);
+    log.info(`i2v task ${id} (${VIDEO_MODEL}, ${duration}s ${i.resolution})`);
+    return id;
+  });
   const r = await waitTask(taskId, "video");
   return { ...r, credits: r.credits ?? duration * RUNWAY.videoCreditsPerSecond(i.resolution) };
 }
 
-export async function runwayTextToVideo(i: { prompt: string; seconds: number; aspect: Aspect; resolution: "720p" | "1080p" }): Promise<RunwayResult> {
+export async function runwayTextToVideo(i: { prompt: string; seconds: number; aspect: Aspect; resolution: "720p" | "1080p"; ledger?: TaskLedger; key?: string }): Promise<RunwayResult> {
   const duration = clipLength(i.seconds);
-  const start = await call("generate_video", { model: VIDEO_MODEL, promptText: i.prompt.slice(0, 3400), ratio: i.aspect, duration, resolution: i.resolution });
-  const taskId = taskIdOf(start.json, start.text);
-  log.info(`t2v task ${taskId} (${VIDEO_MODEL}, ${duration}s ${i.resolution})`);
+  const taskId = await startOrResume(i.ledger, i.key, async () => {
+    const start = await call("generate_video", { model: VIDEO_MODEL, promptText: i.prompt.slice(0, 3400), ratio: i.aspect, duration, resolution: i.resolution });
+    const id = taskIdOf(start.json, start.text);
+    log.info(`t2v task ${id} (${VIDEO_MODEL}, ${duration}s ${i.resolution})`);
+    return id;
+  });
   const r = await waitTask(taskId, "video");
   return { ...r, credits: r.credits ?? duration * RUNWAY.videoCreditsPerSecond(i.resolution) };
 }
 
-export async function runwayEnhanceFps(i: { videoUrl: string; taskId?: string; fps: number; seconds: number }): Promise<RunwayResult> {
+export async function runwayEnhanceFps(i: { videoUrl: string; taskId?: string; fps: number; seconds: number; ledger?: TaskLedger; key?: string }): Promise<RunwayResult> {
   const video = i.taskId ? { taskId: i.taskId } : { url: i.videoUrl, durationSeconds: i.seconds };
-  const start = await call("enhance_frame_rate", { video, targetFrameRate: String(i.fps) });
-  const taskId = taskIdOf(start.json, start.text);
+  const taskId = await startOrResume(i.ledger, i.key, async () => {
+    const start = await call("enhance_frame_rate", { video, targetFrameRate: String(i.fps) });
+    return taskIdOf(start.json, start.text);
+  });
   const r = await waitTask(taskId, "video");
   return { ...r, credits: r.credits ?? Math.max(1, Math.ceil(i.seconds / 2)) };
 }
 
 /** Music: a song with vocals (lyrics in the prompt) or an instrumental bed. Lyria 3 Pro for full tracks, Lyria 3 Clip for short beds. */
-export async function runwayMusic(i: { prompt: string; seconds: number; lyrics?: string; instrumental?: boolean; title?: string }): Promise<RunwayResult> {
+export async function runwayMusic(i: { prompt: string; seconds: number; lyrics?: string; instrumental?: boolean; title?: string; ledger?: TaskLedger; key?: string }): Promise<RunwayResult> {
   const song = Boolean(i.lyrics && !i.instrumental);
   const model = song || i.seconds > 30 ? "lyria-3-pro" : "lyria-3-clip";
   const promptText = [i.prompt, song ? `Lyrics:\n${i.lyrics}` : "Instrumental, no vocals.", `Length: at least ${Math.round(i.seconds)} seconds.`].join("\n\n").slice(0, 5000);
-  const start = await call("generate_music", { promptText, model, ...(i.title ? { name: i.title.slice(0, 200) } : {}), confirmRepeat: true });
-  const taskId = taskIdOf(start.json, start.text);
-  log.info(`music task ${taskId} (${model})`);
+  const taskId = await startOrResume(i.ledger, i.key, async () => {
+    const start = await call("generate_music", { promptText, model, ...(i.title ? { name: i.title.slice(0, 200) } : {}), confirmRepeat: true });
+    const id = taskIdOf(start.json, start.text);
+    log.info(`music task ${id} (${model})`);
+    return id;
+  });
   const r = await waitTask(taskId, "audio", 15 * 60_000);
   return { ...r, credits: r.credits ?? RUNWAY.musicCredits(i.seconds, { song }) };
 }

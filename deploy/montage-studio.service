@@ -17,6 +17,8 @@ RestartSec=10
 # Jobs resume from data/<role>/jobs after a restart; give in-flight uploads/encodes a moment.
 TimeoutStopSec=120
 KillSignal=SIGTERM
+# Only the main process gets SIGTERM; in-flight tx / upload scripts finish before it exits (SIGKILL after the timeout).
+KillMode=mixed
 # ffmpeg encodes and image work must not starve the latency-sensitive jev-fc-buddy on this box.
 CPUWeight=50
 Nice=5

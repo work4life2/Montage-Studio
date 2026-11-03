@@ -7,7 +7,7 @@ import { probeVideo } from "../media/edit.js";
 import { costPlus, gasLine, llmLine, num } from "../pricing.js";
 import { chatJson } from "../relay.js";
 import { recordSpend, saveJob, type Job } from "../jobs/store.js";
-import { RUNWAY, runwayEnhanceFps, runwayImageToVideo, runwayMusic, runwayTextToVideo } from "../providers/runway.js";
+import { RUNWAY, runwayEnhanceFps, runwayImageToVideo, runwayMusic, runwayTextToVideo, type TaskLedger } from "../providers/runway.js";
 import type { Deliverable, RoleSpec } from "./types.js";
 
 const log = logger("renderfarm");
@@ -131,6 +131,15 @@ export async function renderAll(job: Job, spec: RenderSpec): Promise<Deliverable
   fs.mkdirSync(clipsDir, { recursive: true });
   fs.mkdirSync(rawDir, { recursive: true });
   const usd = getConfig().pricing.runwayUsdPerCredit;
+  const ledgerFile = path.join(dir, "runway-tasks.json");
+  const tasks: Record<string, string> = fs.existsSync(ledgerFile) ? JSON.parse(fs.readFileSync(ledgerFile, "utf8")) : {};
+  const ledger: TaskLedger = {
+    get: (k) => tasks[k],
+    set: (k, id) => {
+      tasks[k] = id;
+      fs.writeFileSync(ledgerFile, JSON.stringify(tasks, null, 2));
+    },
+  };
 
   await pool(spec.shots, 3, async (shot) => {
     const out = path.join(clipsDir, `${shot.id}.mp4`);
@@ -140,9 +149,10 @@ export async function renderAll(job: Job, spec: RenderSpec): Promise<Deliverable
     let r: { url: string; credits?: number; taskId?: string } | undefined;
     for (let attempt = 1; attempt <= 2 && !r; attempt++) {
       try {
+        const key = `render:${shot.id}:${attempt}`;
         r = shot.image
-          ? await runwayImageToVideo({ image: shot.image, prompt: shot.prompt, seconds, aspect: spec.aspect, resolution: spec.resolution })
-          : await runwayTextToVideo({ prompt: shot.prompt, seconds, aspect: spec.aspect, resolution: spec.resolution });
+          ? await runwayImageToVideo({ image: shot.image, prompt: shot.prompt, seconds, aspect: spec.aspect, resolution: spec.resolution, ledger, key })
+          : await runwayTextToVideo({ prompt: shot.prompt, seconds, aspect: spec.aspect, resolution: spec.resolution, ledger, key });
       } catch (err) {
         log.warn(`${job.id}: ${shot.id} render attempt ${attempt} failed: ${String(err).slice(0, 300)}`);
         if (attempt === 2) throw err;
@@ -153,10 +163,10 @@ export async function renderAll(job: Job, spec: RenderSpec): Promise<Deliverable
     if (spec.fps60) {
       let e;
       try {
-        e = await runwayEnhanceFps({ videoUrl: r!.url, taskId: r!.taskId, fps: 60, seconds });
+        e = await runwayEnhanceFps({ videoUrl: r!.url, taskId: r!.taskId, fps: 60, seconds, ledger, key: `fps:${shot.id}` });
       } catch (err) {
         log.warn(`${job.id}: ${shot.id} 60 fps by task id failed (${String(err).slice(0, 160)}), retrying by URL`);
-        e = await runwayEnhanceFps({ videoUrl: r!.url, fps: 60, seconds });
+        e = await runwayEnhanceFps({ videoUrl: r!.url, fps: 60, seconds, ledger, key: `fps-url:${shot.id}` });
       }
       recordSpend(job, `60fps ${shot.id}`, (e.credits ?? Math.ceil(seconds / 2)) * usd, e.credits);
       await download(e.url, out);
@@ -170,7 +180,7 @@ export async function renderAll(job: Job, spec: RenderSpec): Promise<Deliverable
     for (let k = 1; k <= spec.music.takes; k++) {
       const file = path.join(dir, `music-${k}.mp3`);
       if (!fs.existsSync(file)) {
-        const m = await runwayMusic({ prompt: spec.music.prompt, seconds: spec.music.seconds, lyrics: spec.music.lyrics, instrumental: spec.music.instrumental, title: spec.music.title });
+        const m = await runwayMusic({ prompt: spec.music.prompt, seconds: spec.music.seconds, lyrics: spec.music.lyrics, instrumental: spec.music.instrumental, title: spec.music.title, ledger, key: `music:${k}` });
         recordSpend(job, `music take ${k}`, (m.credits ?? RUNWAY.musicCredits(spec.music.seconds, { song: !spec.music.instrumental })) * usd, m.credits);
         await download(m.url, file);
       }
