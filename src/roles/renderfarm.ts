@@ -107,6 +107,12 @@ export async function planRender(job: Job): Promise<RenderSpec> {
   spec.resolution = spec.resolution === "720p" || e.resolution === "720p" ? "720p" : "1080p";
   spec.fps60 = e.fps60 !== false;
   spec.shots = (spec.shots ?? []).slice(0, shots);
+  // The quote paid for shots × clip(secondsPerShot): never render more clip-seconds than that.
+  if (e.secondsPerShot !== undefined) {
+    const per = num(e.secondsPerShot, 3, 1, 14);
+    const budget = spec.shots.length * clipSecondsFor(per);
+    if (spec.shots.reduce((a, s) => a + clipSecondsFor(num(s.seconds, per, 1, 14)), 0) > budget) for (const s of spec.shots) s.seconds = per;
+  }
   if (music === "none") spec.music = undefined;
   else if (spec.music) {
     spec.music.instrumental = music !== "song";
