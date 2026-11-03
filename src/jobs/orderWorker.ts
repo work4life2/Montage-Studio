@@ -21,7 +21,7 @@ export interface Order {
   conversationId?: string;
   offerId?: string;
   fundingSource?: string;
-  split?: { role?: string; claimableAmount?: string; claimBlocker?: string | null; nothingToClaim?: boolean; teamConversationId?: string | null; [k: string]: unknown } | null;
+  split?: { role?: string; claimableAmount?: string; claimBlocker?: string | null; nothingToClaim?: boolean; teamConversationId?: string | null; payout?: { claimableAmount?: string; claimBlocker?: string | null; nothingToClaim?: boolean }; [k: string]: unknown } | null;
   [k: string]: unknown;
 }
 

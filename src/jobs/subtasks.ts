@@ -192,7 +192,8 @@ export async function claimSplits(role: Role): Promise<number> {
     } catch {
       continue;
     }
-    const s = order.split;
+    // The prime's share sits under split.payout; an assignee's fields are on split itself.
+    const s = (order.split?.role === "prime" ? (order.split.payout as typeof order.split | undefined) : order.split) ?? undefined;
     if (!s || s.nothingToClaim) {
       if (s?.nothingToClaim) {
         job.notes.push("nothing-to-claim");
