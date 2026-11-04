@@ -54,6 +54,8 @@ export interface Job {
   spend?: Array<{ what: string; usd: number; units?: number; at: string }>;
   /** Montage only: the production state machine (sub-tasks, phases, edit). */
   production?: unknown;
+  /** When the money arrived (our claim, a split claim, or the buyer's early release); updatedAt keeps moving. */
+  settledAt?: string;
   /** Last time we asked the buyer for missing input (awaiting_input). */
   askedAt?: string;
 }
@@ -85,6 +87,13 @@ const safe = (s: string) => s.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
 
 export function jobPath(role: Role, id: string) {
   return path.join(roleDir(role, "jobs"), safe(id));
+}
+
+/** Mark a job settled, keeping the settlement time separate from updatedAt. */
+export function markSettled(job: Job, at?: string): Job {
+  job.status = "settled";
+  job.settledAt = at && !Number.isNaN(Date.parse(at)) ? at : new Date().toISOString();
+  return saveJob(job);
 }
 
 export function saveJob(job: Job): Job {

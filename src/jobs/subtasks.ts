@@ -8,7 +8,7 @@ import { termix } from "../termix/client.js";
 import { Split, type SubtaskInvite } from "../termix/split.js";
 import { roleSpec } from "../roles/index.js";
 import type { Deliverable } from "../roles/types.js";
-import { createJob, findJobBySubtask, listJobs, saveJob, type Job } from "./store.js";
+import { createJob, findJobBySubtask, listJobs, markSettled, saveJob, type Job } from "./store.js";
 import { deliver, getOrder, type Order } from "./orderWorker.js";
 
 const log = logger("subtasks");
@@ -205,8 +205,7 @@ export async function claimSplits(role: Role): Promise<number> {
     try {
       const r = await split.claim(job.orderId);
       job.txHashes.splitClaim = r.results?.[0]?.txHash ?? "submitted";
-      job.status = "settled";
-      saveJob(job);
+      markSettled(job);
       claimed++;
       t.log.info(`${job.orderId}: claimed ${s.claimableAmount} (${job.kind === "subtask" ? "sub-task payout" : "prime residual"})`);
       await notify("split.claimed", { role, orderId: job.orderId, amount: s.claimableAmount, tx: job.txHashes.splitClaim });

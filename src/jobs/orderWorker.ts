@@ -8,7 +8,7 @@ import { termix, type RemoteConversation, type TxIntent } from "../termix/client
 import { briefFromMessages, buyerIdentity, messagesForOrder } from "../termix/brief.js";
 import { roleSpec } from "../roles/index.js";
 import type { Deliverable } from "../roles/types.js";
-import { createJob, findJobByOrder, findOfferRecord, loadConversation, saveJob, type Job } from "./store.js";
+import { createJob, findJobByOrder, findOfferRecord, listJobs, loadConversation, markSettled, saveJob, type Job } from "./store.js";
 import { postNotice } from "./chat.js";
 
 export interface Order {
@@ -385,7 +385,41 @@ export async function sweepOrders(role: Role): Promise<string[]> {
       saveJob(job);
     }
   }
+  await reconcileUnlisted(role, new Set(items.map((o) => o.id)));
   return actionable;
+}
+
+const unexpectedWarned = new Set<string>();
+
+/**
+ * A buyer who accepts / releases early settles the order without our claim, and it then drops out of
+ * every list above, so the job stayed "delivered" forever (same gap holo and jev had). Ask the
+ * platform about each such job. Split jobs (sub-tasks, and Montage orders with a crew) are left to
+ * claimSplits, which reads them every sweep and must claim the payout first — except once it has
+ * found nothing to claim, when only the platform status can close them.
+ */
+async function reconcileUnlisted(role: Role, seen: Set<string>): Promise<void> {
+  const t = termix(role);
+  const stale = listJobs(role).filter((j) => {
+    if (j.status !== "delivered" || seen.has(j.orderId) || /^(local|pending):/.test(j.orderId)) return false;
+    const split = j.kind === "subtask" || (role === "montage" && j.production);
+    return !split || j.notes.includes("nothing-to-claim");
+  });
+  for (const job of stale) {
+    try {
+      const o = await getOrder(role, job.orderId);
+      if (o.status === "SETTLED") {
+        t.log.info(`order ${o.id}: SETTLED on the platform (buyer release or dispute ruling), marking job ${job.id} settled`);
+        markSettled(job, typeof o.updatedAt === "string" ? o.updatedAt : undefined);
+      } else if (!["DELIVERED", "IN_PROGRESS", "IN_DISPUTE"].includes(o.status) && !unexpectedWarned.has(o.id)) {
+        // Not a payout (e.g. EXPIRED): leave the job as is so the operator sees it.
+        unexpectedWarned.add(o.id);
+        t.log.warn(`order ${o.id}: platform status ${o.status}, job ${job.id} left as delivered`);
+      }
+    } catch (err) {
+      t.log.warn(`order ${job.orderId}: could not reconcile delivered job — ${String(err)}`);
+    }
+  }
 }
 
 /**
@@ -407,8 +441,7 @@ export async function claimExpiredDeliveries(role: Role): Promise<number> {
       const job = findJobByOrder(role, o.id);
       if (job) {
         job.txHashes.claimAfterTimeout = r.results?.[0]?.txHash ?? "";
-        job.status = "settled";
-        saveJob(job);
+        markSettled(job);
       }
       claimed++;
       await notify("order.claimed", { role, orderId: o.id, tx: r.results?.[0]?.txHash });

@@ -46,7 +46,7 @@ export function startHttp(loops: HostingLoop[]): http.Server {
             r,
             listJobs(r)
               .slice(0, 100)
-              .map((j) => ({ id: j.id, kind: j.kind, orderId: j.orderId, subtaskId: j.subtaskId, status: j.status, error: j.error, updatedAt: j.updatedAt, spendUsd: (j.spend ?? []).reduce((a, s) => a + s.usd, 0), tx: j.txHashes, production: j.production ? summarize(j.production) : undefined })),
+              .map((j) => ({ id: j.id, kind: j.kind, orderId: j.orderId, subtaskId: j.subtaskId, status: j.status, error: j.error, updatedAt: j.updatedAt, settledAt: j.settledAt, spendUsd: (j.spend ?? []).reduce((a, s) => a + s.usd, 0), tx: j.txHashes, production: j.production ? summarize(j.production) : undefined })),
           ]),
         ),
       );
