@@ -76,7 +76,7 @@ Same Linode as 3dcardagent and jev-fc-buddy (172.104.55.67), `/opt/montage-studi
 minute (`npm ci`, build, restart). The service binds `127.0.0.1:8795` only (no nginx site); operator view:
 
 ```bash
-ssh -L 8795:127.0.0.1:8795 root@172.104.55.67    # then http://127.0.0.1:8795/health and /api/jobs
+ssh -L 8795:127.0.0.1:8795 root@172.104.55.67    # then http://127.0.0.1:8795/health, /api/jobs and /api/runway/credits
 journalctl -fu montage-studio
 ```
 
