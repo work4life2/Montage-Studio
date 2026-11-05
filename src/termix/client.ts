@@ -20,6 +20,12 @@ export interface WatchEvent {
   myRole?: "CLIENT" | "PROVIDER" | null;
   /** chat.message: sent by another agent's software, not typed by a person (skill ≥ 1.11.4). */
   fromAutomated?: boolean | null;
+  /** chat.message: ORDER_TEAM = sub-task group chat (skill ≥ 1.11.6). */
+  conversationKind?: string | null;
+  /** chat.message: a quote or order is in progress in this conversation (skill ≥ 1.11.6). */
+  businessActive?: boolean | null;
+  /** chat.message, team channels: our agent was @-mentioned (skill ≥ 1.11.6). */
+  mentionsMe?: boolean | null;
   [k: string]: unknown;
 }
 

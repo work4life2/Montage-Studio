@@ -85,6 +85,16 @@ function loadCachedToken(forAgentId) {
   return m ? m[1].trim() : null;
 }
 
+/** The agent name recorded next to the cached runtime token (team-channel @-mention fallback). */
+function cachedAgentName() {
+  try {
+    const name = readFileSync(envCachePath(), "utf8").match(/^# agentId=\S+ agentTokenId=\S+ agentName=(.+)$/m)?.[1]?.trim();
+    return name && name !== "undefined" && name !== "null" ? name : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeCachedToken(token, meta) {
   const lines = [
     `# Termix A2A runtime token — keep local, do NOT paste back to chat.`,
@@ -853,7 +863,7 @@ async function cmdAutoreply() {
         if (m.createdAt && m.createdAt > since) since = m.createdAt;
         continue;
       }
-      const decision = autoreplyDecision(m, guard);
+      const decision = autoreplyDecision(m, guard, Date.now(), { agentName: cachedAgentName() });
       if (decision.action === "skip") {
         process.stderr.write(`[autoreply] no reply to ${m.messageId} in ${m.conversationId}: ${decision.reason}\n`);
         remember(local, m.conversationId, { messageId: m.messageId, text: m.text ?? "", fromSelf: false });
@@ -906,15 +916,20 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // auto-replying agent, two "always answer" workers talk to each other forever
 // (seen in production: two hosted sellers each read the other's replies as a
 // buyer). The worker therefore:
+//   • in an ORDER_TEAM channel (sub-task group chat) answers only when its agent
+//     is @-mentioned — the cloud-hosting rule — with no other limits;
 //   • never auto-replies where its agent is the CLIENT (it contacted a seller;
 //     the persona is a seller's, so answering would pitch back at them);
-//   • to automated senders, sends at most AUTOREPLY_AGENT_BUDGET replies per
-//     conversation per AUTOREPLY_AGENT_WINDOW_MS, skips a repeat of the previous
-//     message, and when the budget runs out posts one pause notice, then stays
-//     quiet until the window frees up.
+//   • to automated senders, skips a repeat of the previous message and, unless
+//     the conversation has business in progress (`businessActive`: a quote on the
+//     table or an open order), sends at most AUTOREPLY_AGENT_BUDGET replies per
+//     conversation per AUTOREPLY_AGENT_WINDOW_MS; when that runs out it posts one
+//     pause notice, then stays quiet until the window frees up. The budget is a
+//     cost cap for a runaway loop, set well above a fast real negotiation; the
+//     model's own NO_REPLY judgement is what normally ends bot chatter.
 // Older backends send neither `myRole` nor `fromAutomated`; every sender is then
-// budgeted (a person rarely sends 6 messages in 10 minutes, a loop always does).
-export const AUTOREPLY_AGENT_BUDGET = 6;
+// budgeted (a person rarely sends 20 messages in 10 minutes, a loop always does).
+export const AUTOREPLY_AGENT_BUDGET = 20;
 export const AUTOREPLY_AGENT_WINDOW_MS = 10 * 60 * 1000;
 export const AUTOREPLY_PAUSE_NOTICE =
   "Auto-replies in this conversation are paused for a while (too many automated messages in a short time). The owner will follow up if needed.";
@@ -925,7 +940,14 @@ export const AUTOREPLY_PAUSE_NOTICE =
  * worker's per-conversation memory (a Map); `now` is injectable for tests.
  * Call `recordAutoreply` after a reply is actually posted.
  */
-export function autoreplyDecision(m, guard, now = Date.now()) {
+export function autoreplyDecision(m, guard, now = Date.now(), self = {}) {
+  if (m.conversationKind === "ORDER_TEAM") {
+    // Older backends send no mentionsMe; fall back to the agent name the token cache recorded.
+    const mentioned = typeof m.mentionsMe === "boolean"
+      ? m.mentionsMe
+      : Boolean(self.agentName && String(m.text ?? "").toLowerCase().includes(`@${String(self.agentName).toLowerCase()}`));
+    return mentioned ? { action: "reply" } : { action: "skip", reason: "team channel message that does not @-mention this agent" };
+  }
   if (m.myRole === "CLIENT") return { action: "skip", reason: "this agent started the conversation (client side)" };
   if (m.fromAutomated === false) return { action: "reply" };
   const conv = guard.get(m.conversationId) ?? { replies: [], lastText: null, paused: false };
@@ -936,7 +958,7 @@ export function autoreplyDecision(m, guard, now = Date.now()) {
   const repeat = Boolean(text) && text === conv.lastText;
   conv.lastText = text;
   if (repeat) return { action: "skip", reason: "same text as the previous message" };
-  if (conv.replies.length < AUTOREPLY_AGENT_BUDGET) return { action: "reply" };
+  if (m.businessActive === true || conv.replies.length < AUTOREPLY_AGENT_BUDGET) return { action: "reply" };
   if (conv.paused) return { action: "skip", reason: `reply budget spent (${AUTOREPLY_AGENT_BUDGET} per ${AUTOREPLY_AGENT_WINDOW_MS / 60000} min)` };
   conv.paused = true;
   return { action: "pause", reason: `reply budget spent (${AUTOREPLY_AGENT_BUDGET} per ${AUTOREPLY_AGENT_WINDOW_MS / 60000} min)` };
@@ -962,6 +984,11 @@ export const NO_REPLY_RULE =
   `Answer only a real request for your service (a question, a quote, an order).`;
 const HUMAN_FALLBACK_REPLY = "Thanks for your message — how can I help?";
 
+/** NO_REPLY is offered to another agent's software in a one-to-one chat, never to a person or an @-mention in a team channel. */
+function mayStaySilent(m) {
+  return m.fromAutomated === true && m.conversationKind !== "ORDER_TEAM";
+}
+
 /**
  * Chat-completion messages for one inbound row: persona, the no-reply rule when
  * the sender is automated, then `history` (rows of { text, fromSelf } oldest
@@ -970,7 +997,7 @@ const HUMAN_FALLBACK_REPLY = "Thanks for your message — how can I help?";
  */
 export function buildReplyMessages(persona, m, history = []) {
   const messages = [{ role: "system", content: persona }];
-  if (m.fromAutomated === true) messages.push({ role: "system", content: NO_REPLY_RULE });
+  if (mayStaySilent(m)) messages.push({ role: "system", content: NO_REPLY_RULE });
   const turns = history.filter((h) => h && h.messageId !== m.messageId && String(h.text ?? "").trim());
   for (const h of turns.slice(-AUTOREPLY_HISTORY_LIMIT)) messages.push({ role: h.fromSelf ? "assistant" : "user", content: String(h.text) });
   messages.push({ role: "user", content: m.text ?? "" });
@@ -981,7 +1008,7 @@ export function buildReplyMessages(persona, m, history = []) {
 export function interpretReply(output, m) {
   const raw = String(output ?? "").trim();
   if (!raw.includes(NO_REPLY)) return { text: raw };
-  if (m.fromAutomated === true) return { silent: true };
+  if (mayStaySilent(m)) return { silent: true };
   const text = raw.split(NO_REPLY).join("").trim();
   return { text: text || HUMAN_FALLBACK_REPLY };
 }

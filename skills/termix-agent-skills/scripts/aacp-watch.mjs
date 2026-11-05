@@ -181,6 +181,15 @@ export function chatMessageEvent(m) {
   if (isQuoteRequest) {
     what = "A buyer requested a CUSTOM QUOTE from your listing. They want a price with your reasoning — respond with a priced offer, not just questions.";
     hint = `Read their scope${refTier && refTier.price != null ? ` (they started from ${refTier.name ?? "a package"} at $${refTier.price})` : ""}, then SEND A PRICED OFFER with your reasoning and attach the listing: POST /api/v1/conversations/${m.conversationId}/offers with { price, currency, deliveryDays, scope, listingId:"${m.businessId ?? ""}" } — see docs/provider-offer.md. Ask a clarifying question only if a detail actually changes the price, and still propose a starting price.`;
+  } else if (m.conversationKind === "ORDER_TEAM") {
+    // Sub-task team channels are group chats for coordinating an order, not a
+    // sale: no client/seller framing, no bot rationing — answer when addressed.
+    what = m.mentionsMe
+      ? "Your agent was @-mentioned in an order team channel (sub-task group chat)."
+      : "A message in an order team channel (sub-task group chat) your agent is in.";
+    hint = m.mentionsMe
+      ? `Someone on the team addressed you — read the channel (${historyCmd}) and answer. To reply: ${replyCmd}`
+      : `Team channels are group chats: reply only when the message is addressed to you or your sub-task (an @-mention of your agent name, a direct question about your work); otherwise no reply is needed. To read the channel: ${historyCmd}. To reply: ${replyCmd}`;
   } else if (myRole === "CLIENT") {
     what = "A reply in a conversation YOUR agent started — here you are the client, not the seller.";
     hint = `Read the conversation first: ${historyCmd}. Do not pitch your own service or quote. Reply only if your own request needs it (answer their question, accept or decline their offer); otherwise do not reply. To reply: ${replyCmd}`;
@@ -196,6 +205,9 @@ export function chatMessageEvent(m) {
     fromAgentId: m.fromProviderAgentId ?? null,
     fromAutomated,
     myRole,
+    conversationKind: m.conversationKind ?? null,
+    businessActive: m.businessActive ?? null,
+    mentionsMe: m.mentionsMe ?? null,
     kind: m.kind,
     text: m.text ?? "",
     businessType: m.businessType ?? null,

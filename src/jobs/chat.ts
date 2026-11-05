@@ -8,7 +8,7 @@ import { termix, type RemoteConversation, type RemoteMessage, type WatchEvent } 
 import { briefFromMessages, imageUrlsIn, messagesForOrder, offerStateFromMessages } from "../termix/brief.js";
 import { isChinese } from "../util/lang.js";
 import { findJobByOrder, loadConversation, saveConversation, type ConversationLog, type OfferRecord } from "./store.js";
-import { fromBot, NO_REPLY_RULE, replyOrSilence, skipReason } from "./agentChat.js";
+import { mayStaySilent, NO_REPLY_RULE, replyOrSilence, skipReason } from "./agentChat.js";
 
 const log = logger("chat");
 
@@ -198,7 +198,7 @@ export async function handleChatMessage(role: Role, ev: WatchEvent, hooks: { onB
     const recentRefs = refs.length ? refs : window ? briefFromMessages(window.slice(-10)).refs : [];
     const images = await fetchImages(recentRefs);
     const userContent: ChatMessage["content"] = [
-      { type: "text", text: `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\n${fromBot(ev) ? `${NO_REPLY_RULE}\n\n` : ""}Write your next reply to the buyer (reply text only). If you are quoting, end with the single QUOTE line.` },
+      { type: "text", text: `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\n${mayStaySilent(ev) ? `${NO_REPLY_RULE}\n\n` : ""}Write your next reply to the buyer (reply text only). If you are quoting, end with the single QUOTE line.` },
       ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
     ];
     const raw = await chat([{ role: "system", content: chatSystemPrompt(role) }, { role: "user", content: userContent }], { tag: `chat:${role}`, maxTokens: 3000 });
