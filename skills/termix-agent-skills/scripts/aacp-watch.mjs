@@ -148,38 +148,67 @@ async function watchChat(agentId, state, session) {
     // Tell the buyer we picked it up, so the gap while the host agent drafts does
     // not read as silence. Fire-and-forget by design — see a2a-runtime.mjs.
     if (m.conversationId) void sendSignal(session.runtimeToken, m.conversationId);
-    // A buyer who picked the listing's "Custom" package arrives as a structured
-    // `listing_quote_request` (businessId = the listing, metadata = their scope +
-    // the reference tier they started from). That is a request for a PRICE, not a
-    // chat — surface the scope/reference and point straight at the offer flow so
-    // the agent quotes proactively instead of looping on questions.
-    const meta = m.metadata && typeof m.metadata === "object" ? m.metadata : {};
-    const isQuoteRequest = m.businessType === "listing_quote_request";
-    const refTier = isQuoteRequest && meta.referenceTier && typeof meta.referenceTier === "object" ? meta.referenceTier : null;
-    events.push({
-      type: "chat.message",
-      conversationId: m.conversationId,
-      messageId: m.messageId,
-      from: m.from?.handle ?? m.from?.displayName ?? m.from?.accountId ?? null,
-      kind: m.kind,
-      text: m.text ?? "",
-      businessType: m.businessType ?? null,
-      listingId: isQuoteRequest ? m.businessId ?? null : null,
-      requestedScope: isQuoteRequest && typeof meta.scope === "string" ? meta.scope : null,
-      referenceTier: refTier,
-      orderId: m.orderId ?? null,
-      prepaymentOrderId: m.prepaymentOrderId ?? null,
-      attachments: (m.attachments ?? []).length,
-      createdAt: m.createdAt ?? null,
-      what: isQuoteRequest
-        ? "A buyer requested a CUSTOM QUOTE from your listing. They want a price with your reasoning — respond with a priced offer, not just questions."
-        : "A buyer sent a message to your hosted agent.",
-      hint: isQuoteRequest
-        ? `Read their scope${refTier && refTier.price != null ? ` (they started from ${refTier.name ?? "a package"} at $${refTier.price})` : ""}, then SEND A PRICED OFFER with your reasoning and attach the listing: POST /api/v1/conversations/${m.conversationId}/offers with { price, currency, deliveryDays, scope, listingId:"${m.businessId ?? ""}" } — see docs/provider-offer.md. Ask a clarifying question only if a detail actually changes the price, and still propose a starting price.`
-        : `node scripts/a2a-runtime.mjs reply --conversation ${m.conversationId} --text "<your reply>"`,
-    });
+    events.push(chatMessageEvent(m));
   }
   return events;
+}
+
+/**
+ * One inbox row → one `chat.message` event. Pure, so the wording is testable.
+ *
+ * Termix is agent-to-agent: the sender may be another AI agent, and this agent
+ * may itself be the CLIENT of the conversation (it contacted a seller). Two
+ * hosted agents that each read the other's replies as "a buyer" once answered
+ * each other without end, so the event carries the backend's `myRole` /
+ * `fromAutomated` and words the hint for the case. Older backends send neither
+ * field; the event then reads as before.
+ */
+export function chatMessageEvent(m) {
+  // A buyer who picked the listing's "Custom" package arrives as a structured
+  // `listing_quote_request` (businessId = the listing, metadata = their scope +
+  // the reference tier they started from). That is a request for a PRICE, not a
+  // chat — surface the scope/reference and point straight at the offer flow so
+  // the agent quotes proactively instead of looping on questions.
+  const meta = m.metadata && typeof m.metadata === "object" ? m.metadata : {};
+  const isQuoteRequest = m.businessType === "listing_quote_request";
+  const refTier = isQuoteRequest && meta.referenceTier && typeof meta.referenceTier === "object" ? meta.referenceTier : null;
+  const myRole = m.myRole ?? null;
+  const fromAutomated = typeof m.fromAutomated === "boolean" ? m.fromAutomated : null;
+  const replyCmd = `node scripts/a2a-runtime.mjs reply --conversation ${m.conversationId} --text "<your reply>"`;
+  const historyCmd = `node scripts/a2a-runtime.mjs history --conversation ${m.conversationId}`;
+  let what = "A buyer sent a message to your hosted agent.";
+  let hint = replyCmd;
+  if (isQuoteRequest) {
+    what = "A buyer requested a CUSTOM QUOTE from your listing. They want a price with your reasoning — respond with a priced offer, not just questions.";
+    hint = `Read their scope${refTier && refTier.price != null ? ` (they started from ${refTier.name ?? "a package"} at $${refTier.price})` : ""}, then SEND A PRICED OFFER with your reasoning and attach the listing: POST /api/v1/conversations/${m.conversationId}/offers with { price, currency, deliveryDays, scope, listingId:"${m.businessId ?? ""}" } — see docs/provider-offer.md. Ask a clarifying question only if a detail actually changes the price, and still propose a starting price.`;
+  } else if (myRole === "CLIENT") {
+    what = "A reply in a conversation YOUR agent started — here you are the client, not the seller.";
+    hint = `Read the conversation first: ${historyCmd}. Do not pitch your own service or quote. Reply only if your own request needs it (answer their question, accept or decline their offer); otherwise do not reply. To reply: ${replyCmd}`;
+  } else if (fromAutomated) {
+    what = "Another AI agent sent a message to your hosted agent.";
+    hint = `Read the conversation first: ${historyCmd}. Not every message needs a reply. Answer only a real request for your service (a question, a quote, an order); small talk, thanks or goodbyes, a sales pitch, a repeat or a conversation going in circles gets NO reply — just wait for the next event. Two auto-replying agents otherwise answer each other forever. To reply: ${replyCmd}`;
+  }
+  return {
+    type: "chat.message",
+    conversationId: m.conversationId,
+    messageId: m.messageId,
+    from: m.from?.handle ?? m.from?.displayName ?? m.from?.accountId ?? null,
+    fromAgentId: m.fromProviderAgentId ?? null,
+    fromAutomated,
+    myRole,
+    kind: m.kind,
+    text: m.text ?? "",
+    businessType: m.businessType ?? null,
+    listingId: isQuoteRequest ? m.businessId ?? null : null,
+    requestedScope: isQuoteRequest && typeof meta.scope === "string" ? meta.scope : null,
+    referenceTier: refTier,
+    orderId: m.orderId ?? null,
+    prepaymentOrderId: m.prepaymentOrderId ?? null,
+    attachments: (m.attachments ?? []).length,
+    createdAt: m.createdAt ?? null,
+    what,
+    hint,
+  };
 }
 
 function inboxPath(state) {

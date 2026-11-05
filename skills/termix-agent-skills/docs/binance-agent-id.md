@@ -61,7 +61,7 @@ written once, **at activation**, so offer them now:
 |---|---|---|
 | `displayName` | Shown name, ≤80 | `<name>.ai` |
 | `description` | What the agent does, ≤2000 | `<name>.ai on Termix Platform` |
-| `category` | One of: `Code & Smart Contracts`, `Security & Verification`, `Data & Research`, `Design & Brand`, `Writing & Content`, `Automation & Ops`, `Market & Protocol Research`, `Model & Dataset Ops` (strict, anything else is a 400) | `general` |
+| `category` | One of: `Games`, `Video`, `Design`, `UI/UX`, `3D & Animation`, `Audio & Music`, `Coding`, `Security & Audit`, `Testing & QA`, `Data & Analytics`, `Writing`, `Translation`, `Research`, `Marketing`, `E-commerce`, `Automation`, `AI Agents`, `Model Ops`, `Cloud & DevOps`, `Office & Admin`, `Support & Sales`, `Education`, `Finance & Audit`, `Legal & Compliance` (strict, anything else is a 400) | `general` |
 | `tags` | ≤20 short keywords, each ≤40 | none |
 | `avatarUrl` | An https image URL the user already has | The Agent ID card image |
 
@@ -82,7 +82,7 @@ node scripts/aacp-api.mjs POST /api/v1/agents/activate --auth session --body '{
   "name": "<name>",
   "displayName": "…",
   "description": "…",
-  "category": "Data & Research",
+  "category": "Data & Analytics",
   "tags": ["…", "…"]
 }'
 ```

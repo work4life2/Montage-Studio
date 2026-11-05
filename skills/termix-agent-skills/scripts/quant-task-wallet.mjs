@@ -173,10 +173,25 @@ export async function deriveTaskWalletAddress(seed, index) {
 /**
  * Produce the ONE agentic signature that seeds the tree. The only place the
  * derivation message is signed; returns the 65-byte 0x signature.
+ *
+ * HARD-DISABLED (2026-10-30): the agentic identity IS the Binance Agentic Wallet
+ * (MPC / keyless). Task wallets are derived from the signature bytes and can only
+ * be recovered by reproducing that exact signature — but MPC wallets sign with a
+ * fresh random nonce, so the signature (and the derived task-wallet address)
+ * differs across sessions. Funds sent to such a task wallet can never be swept
+ * back (non-custodial; the backend holds no key either) — real incident, ~9 USDC
+ * stranded. This matches the frontend fail-closed wallet allowlist: MPC/keyless
+ * is forbidden for Quant. Use the `key` identity (WALLET_KEY, a standard private
+ * key → deterministic) or a linked browser-extension wallet (`aacp-link`, which
+ * the gated /sign page validates) instead. The earlier `derive --verify`
+ * determinism probe is NOT relied upon: MPC wallets return a stable signature
+ * within one session, so a same-session double-sign can't detect them.
  */
-export async function signDerivationMessage({ chainId } = {}) {
-  const { signature } = await signTypedData(taskWalletDerivationTypedData({ chainId }), {
-    label: "derive Quant task wallets",
-  });
-  return signature;
+export async function signDerivationMessage() {
+  throw new Error(
+    "Agentic (Binance Agentic Wallet / MPC keyless) identities cannot create Quant task wallets: " +
+      "their signatures are not reproducible across sessions, so funds sent to the derived wallet " +
+      "could not be recovered. Use the key identity (WALLET_KEY) or link a browser-extension wallet " +
+      "(aacp-link.mjs start) instead.",
+  );
 }

@@ -8,6 +8,7 @@ import { termix, type RemoteConversation, type RemoteMessage, type WatchEvent } 
 import { briefFromMessages, imageUrlsIn, messagesForOrder, offerStateFromMessages } from "../termix/brief.js";
 import { isChinese } from "../util/lang.js";
 import { findJobByOrder, loadConversation, saveConversation, type ConversationLog, type OfferRecord } from "./store.js";
+import { fromBot, NO_REPLY_RULE, replyOrSilence, skipReason } from "./agentChat.js";
 
 const log = logger("chat");
 
@@ -164,6 +165,11 @@ export async function handleChatMessage(role: Role, ev: WatchEvent, hooks: { onB
   const refs = imageUrlsIn(text);
   conv.messages.push({ role: "buyer", text: text || `[Custom quote request] ${requested}`, at: new Date().toISOString(), messageId: ev.messageId, from: conv.buyer, refs: refs.length ? refs : undefined });
   saveConversation(role, conv);
+  const skip = skipReason(ev, conv.messages);
+  if (skip) {
+    log.info(`${role}: no reply in ${conversationId}: ${skip}`);
+    return;
+  }
 
   await t.signal(conversationId);
   const keepAlive = setInterval(() => void t.signal(conversationId), 30_000);
@@ -192,12 +198,17 @@ export async function handleChatMessage(role: Role, ev: WatchEvent, hooks: { onB
     const recentRefs = refs.length ? refs : window ? briefFromMessages(window.slice(-10)).refs : [];
     const images = await fetchImages(recentRefs);
     const userContent: ChatMessage["content"] = [
-      { type: "text", text: `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\nWrite your next reply to the buyer (reply text only). If you are quoting, end with the single QUOTE line.` },
+      { type: "text", text: `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\n${fromBot(ev) ? `${NO_REPLY_RULE}\n\n` : ""}Write your next reply to the buyer (reply text only). If you are quoting, end with the single QUOTE line.` },
       ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
     ];
     const raw = await chat([{ role: "system", content: chatSystemPrompt(role) }, { role: "user", content: userContent }], { tag: `chat:${role}`, maxTokens: 3000 });
     const zh = isChinese(text || requested) || isChinese(history);
-    let { text: reply, quote } = parseQuoteReply(raw);
+    const kept = replyOrSilence(raw, ev);
+    if (kept === null) {
+      log.info(`${role}: no reply in ${conversationId}: the model judged it needs none`);
+      return;
+    }
+    let { text: reply, quote } = parseQuoteReply(kept);
     if (!reply && !quote) reply = zh ? "收到，马上处理。" : "Got it — on it.";
     if (quote) {
       try {

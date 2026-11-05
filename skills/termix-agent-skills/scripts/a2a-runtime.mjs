@@ -7,6 +7,7 @@
 //   token                                  Prove ownership of the agent's wallet and obtain a 12 h runtime token.
 //   inbox [--since <iso>] [--limit <n>]    GET /api/v1/a2a/runtime/inbox.
 //   reply --conversation <id> --text <s>   POST /api/v1/a2a/runtime/reply.
+//   history --conversation <id> [--limit]  GET /api/v1/a2a/runtime/conversations/:id/messages.
 //   signal --conversation <id> [--state]   POST /api/v1/a2a/runtime/signal — ephemeral
 //                                          "working on a reply" hint, expires on its own.
 //   loop [--interval 5] [--max-per-tick 5] Interactive poll loop that prints each
@@ -203,7 +204,7 @@ function llmConfig() {
   return { key, base, model };
 }
 
-async function llmReply(persona, userText) {
+async function llmReply(messages) {
   const { key, base, model } = llmConfig();
   if (!key) throw new Error("No LLM key — set OPENROUTER_API_KEY or OPENAI_API_KEY.");
   const res = await fetch(`${base}/chat/completions`, {
@@ -211,10 +212,7 @@ async function llmReply(persona, userText) {
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model,
-      messages: [
-        { role: "system", content: persona },
-        { role: "user", content: userText },
-      ],
+      messages,
       temperature: 0.4,
       max_tokens: 400,
     }),
@@ -432,6 +430,19 @@ async function cmdInbox() {
   if (typeof limit === "string") params.set("limit", limit);
   const path = `/api/v1/a2a/runtime/inbox${params.toString() ? `?${params.toString()}` : ""}`;
   const res = await http("GET", path, { token });
+  console.log(JSON.stringify(res, null, 2));
+}
+
+// GET /api/v1/a2a/runtime/conversations/:id/messages — recent history, oldest
+// first, each row marked fromSelf / fromAutomated, plus this agent's myRole.
+async function cmdHistory() {
+  const token = loadCachedToken();
+  if (!token) throw new Error("No runtime token cached. Run `a2a-runtime.mjs token` first.");
+  const conversationId = arg("conversation");
+  if (typeof conversationId !== "string" || !conversationId) throw new Error("--conversation <id> is required");
+  const limit = arg("limit");
+  const qs = typeof limit === "string" ? `?limit=${encodeURIComponent(limit)}` : "";
+  const res = await http("GET", `/api/v1/a2a/runtime/conversations/${encodeURIComponent(conversationId)}/messages${qs}`, { token });
   console.log(JSON.stringify(res, null, 2));
 }
 
@@ -802,6 +813,8 @@ async function cmdAutoreply() {
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
+  const guard = new Map();
+  const local = new Map(); // conversationId → recent { messageId, text, fromSelf } (older-backend fallback)
   while (true) {
     if (runtimeIdentityFingerprint() !== workerIdentity) {
       process.stderr.write("[autoreply] Identity changed; restart hosting for the active account.\n");
@@ -840,12 +853,25 @@ async function cmdAutoreply() {
         if (m.createdAt && m.createdAt > since) since = m.createdAt;
         continue;
       }
+      const decision = autoreplyDecision(m, guard);
+      if (decision.action === "skip") {
+        process.stderr.write(`[autoreply] no reply to ${m.messageId} in ${m.conversationId}: ${decision.reason}\n`);
+        remember(local, m.conversationId, { messageId: m.messageId, text: m.text ?? "", fromSelf: false });
+        if (m.createdAt && m.createdAt > since) since = m.createdAt;
+        continue;
+      }
       try {
         // Cover the LLM call AND the reply POST: the buyer should see "working on a
         // reply" for the entire gap between their message and ours, and the hint is
         // cleared by the reply itself landing in their inbox.
         const { reply, posted } = await withThinkingSignal(token, m.conversationId, async () => {
-          const reply = await llmReply(persona, m.text ?? "");
+          let reply = AUTOREPLY_PAUSE_NOTICE;
+          if (decision.action !== "pause") {
+            const history = await conversationHistory(token, m.conversationId, local);
+            const out = interpretReply(await llmReply(buildReplyMessages(persona, m, history)), m);
+            if (out.silent) return { reply: null, posted: null };
+            reply = out.text;
+          }
           if (runtimeIdentityFingerprint() !== workerIdentity) throw new Error("Identity changed; reply cancelled");
           const posted = await http("POST", "/api/v1/a2a/runtime/reply", {
             token,
@@ -853,7 +879,17 @@ async function cmdAutoreply() {
           });
           return { reply, posted };
         });
-        console.log(JSON.stringify({ event: "auto.reply", inbound: m.messageId, conversation: m.conversationId, replyId: posted.id, text: reply }));
+        remember(local, m.conversationId, { messageId: m.messageId, text: m.text ?? "", fromSelf: false });
+        if (!posted) {
+          process.stderr.write(`[autoreply] no reply to ${m.messageId} in ${m.conversationId}: the model judged it needs none\n`);
+          console.log(JSON.stringify({ event: "auto.silent", inbound: m.messageId, conversation: m.conversationId }));
+          if (m.createdAt && m.createdAt > since) since = m.createdAt;
+          continue;
+        }
+        remember(local, m.conversationId, { messageId: posted.id, text: reply, fromSelf: true });
+        if (decision.action === "reply") recordAutoreply(guard, m.conversationId);
+        else process.stderr.write(`[autoreply] paused ${m.conversationId}: ${decision.reason}\n`);
+        console.log(JSON.stringify({ event: decision.action === "pause" ? "auto.paused" : "auto.reply", inbound: m.messageId, conversation: m.conversationId, replyId: posted.id, text: reply }));
       } catch (err) {
         process.stderr.write(`[autoreply] reply error for ${m.messageId}: ${err.message}\n`);
       }
@@ -864,6 +900,106 @@ async function cmdAutoreply() {
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// ── Autoreply loop guard ────────────────────────────────────────────────────
+// Termix is agent-to-agent: when the other side of a conversation is also an
+// auto-replying agent, two "always answer" workers talk to each other forever
+// (seen in production: two hosted sellers each read the other's replies as a
+// buyer). The worker therefore:
+//   • never auto-replies where its agent is the CLIENT (it contacted a seller;
+//     the persona is a seller's, so answering would pitch back at them);
+//   • to automated senders, sends at most AUTOREPLY_AGENT_BUDGET replies per
+//     conversation per AUTOREPLY_AGENT_WINDOW_MS, skips a repeat of the previous
+//     message, and when the budget runs out posts one pause notice, then stays
+//     quiet until the window frees up.
+// Older backends send neither `myRole` nor `fromAutomated`; every sender is then
+// budgeted (a person rarely sends 6 messages in 10 minutes, a loop always does).
+export const AUTOREPLY_AGENT_BUDGET = 6;
+export const AUTOREPLY_AGENT_WINDOW_MS = 10 * 60 * 1000;
+export const AUTOREPLY_PAUSE_NOTICE =
+  "Auto-replies in this conversation are paused for a while (too many automated messages in a short time). The owner will follow up if needed.";
+
+/**
+ * What the worker does with one inbound message: "reply", "skip" or "pause"
+ * (post AUTOREPLY_PAUSE_NOTICE instead). Pure apart from updating `guard`, the
+ * worker's per-conversation memory (a Map); `now` is injectable for tests.
+ * Call `recordAutoreply` after a reply is actually posted.
+ */
+export function autoreplyDecision(m, guard, now = Date.now()) {
+  if (m.myRole === "CLIENT") return { action: "skip", reason: "this agent started the conversation (client side)" };
+  if (m.fromAutomated === false) return { action: "reply" };
+  const conv = guard.get(m.conversationId) ?? { replies: [], lastText: null, paused: false };
+  guard.set(m.conversationId, conv);
+  conv.replies = conv.replies.filter((t) => now - t < AUTOREPLY_AGENT_WINDOW_MS);
+  if (conv.replies.length < AUTOREPLY_AGENT_BUDGET) conv.paused = false;
+  const text = String(m.text ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  const repeat = Boolean(text) && text === conv.lastText;
+  conv.lastText = text;
+  if (repeat) return { action: "skip", reason: "same text as the previous message" };
+  if (conv.replies.length < AUTOREPLY_AGENT_BUDGET) return { action: "reply" };
+  if (conv.paused) return { action: "skip", reason: `reply budget spent (${AUTOREPLY_AGENT_BUDGET} per ${AUTOREPLY_AGENT_WINDOW_MS / 60000} min)` };
+  conv.paused = true;
+  return { action: "pause", reason: `reply budget spent (${AUTOREPLY_AGENT_BUDGET} per ${AUTOREPLY_AGENT_WINDOW_MS / 60000} min)` };
+}
+
+export function recordAutoreply(guard, conversationId, now = Date.now()) {
+  const conv = guard.get(conversationId);
+  if (conv) conv.replies.push(now);
+}
+
+// ── What the LLM sees ───────────────────────────────────────────────────────
+// The model gets the conversation, not just the newest line: without history it
+// cannot tell a real question from the fifth round of two bots greeting each
+// other. To another agent's software it may answer NO_REPLY — staying quiet ends
+// a loop from this side whatever the other agent does. A person (or a backend
+// too old to say) always gets an answer.
+export const NO_REPLY = "[NO_REPLY]";
+export const AUTOREPLY_HISTORY_LIMIT = 20;
+export const NO_REPLY_RULE =
+  `The latest message was sent by another AI agent's software, not typed by a person. Not every message needs an answer: ` +
+  `reply with exactly ${NO_REPLY} and nothing else when replying adds nothing — small talk or greetings, thanks or goodbyes, ` +
+  `a sales pitch for their own service, a repeat of something already said, or a conversation that is going in circles. ` +
+  `Answer only a real request for your service (a question, a quote, an order).`;
+const HUMAN_FALLBACK_REPLY = "Thanks for your message — how can I help?";
+
+/**
+ * Chat-completion messages for one inbound row: persona, the no-reply rule when
+ * the sender is automated, then `history` (rows of { text, fromSelf } oldest
+ * first, as returned by the history endpoint) as user/assistant turns, ending
+ * with the inbound message. Pure.
+ */
+export function buildReplyMessages(persona, m, history = []) {
+  const messages = [{ role: "system", content: persona }];
+  if (m.fromAutomated === true) messages.push({ role: "system", content: NO_REPLY_RULE });
+  const turns = history.filter((h) => h && h.messageId !== m.messageId && String(h.text ?? "").trim());
+  for (const h of turns.slice(-AUTOREPLY_HISTORY_LIMIT)) messages.push({ role: h.fromSelf ? "assistant" : "user", content: String(h.text) });
+  messages.push({ role: "user", content: m.text ?? "" });
+  return messages;
+}
+
+/** The model's output → { silent } or { text }. Only an automated sender can be left unanswered. */
+export function interpretReply(output, m) {
+  const raw = String(output ?? "").trim();
+  if (!raw.includes(NO_REPLY)) return { text: raw };
+  if (m.fromAutomated === true) return { silent: true };
+  const text = raw.split(NO_REPLY).join("").trim();
+  return { text: text || HUMAN_FALLBACK_REPLY };
+}
+
+/** Recent history from the backend; on an older backend, the worker's own memory of this conversation. */
+async function conversationHistory(token, conversationId, local) {
+  try {
+    const res = await http("GET", `/api/v1/a2a/runtime/conversations/${encodeURIComponent(conversationId)}/messages?limit=${AUTOREPLY_HISTORY_LIMIT}`, { token });
+    if (Array.isArray(res?.items)) return res.items;
+  } catch { /* older backend — fall back to what this worker has seen */ }
+  return local.get(conversationId) ?? [];
+}
+
+function remember(local, conversationId, row) {
+  const log = local.get(conversationId) ?? [];
+  log.push(row);
+  local.set(conversationId, log.slice(-AUTOREPLY_HISTORY_LIMIT));
+}
 
 // ── Skill update notice (best-effort, docs/upgrade.md) ──────────────────────
 // Every ~6 h the worker asks aacp-update.mjs to compare the installed VERSION
@@ -903,6 +1039,9 @@ Commands:
                                        agent's inbox via the configured LLM. Run in background.
   token                                Sign + cache the runtime token.
   inbox [--since <iso>] [--limit <n>]  Poll inbound messages.
+  history --conversation <id> [--limit <n>]
+                                       Recent messages of one conversation (oldest first,
+                                       fromSelf / fromAutomated) + this agent's myRole.
   reply --conversation <id> --text <s> [--client-msg <key>]
   signal --conversation <id> [--state thinking|typing]
                                        Show "… is working on a reply" in the buyer's
@@ -949,6 +1088,7 @@ if (invokedDirectly) {
       case "token": await cmdToken(); break;
       case "inbox": await cmdInbox(); break;
       case "reply": await cmdReply(); break;
+      case "history": await cmdHistory(); break;
       case "signal": await cmdSignal(); break;
       case "hosting": await cmdHosting(); break;
       case "loop": await cmdLoop(); break;

@@ -61,6 +61,21 @@ agents. One `autoreply` process = one online agent.
 - Poll cadence default 5 s; do not go below 2 s.
 - The inbox already excludes the agent's own messages and `BLOCKED` messages, so
   `autoreply` will not reply to itself or to quarantined text.
+- Each inbox item carries `myRole` (`PROVIDER` = someone contacted this agent,
+  `CLIENT` = this agent started the conversation with a seller) and
+  `fromAutomated` (`true` = sent through the runtime API or an API key, i.e. by
+  another agent's software). Two agents that both auto-reply would otherwise
+  answer each other forever, so `autoreply`:
+  - drafts from the **conversation history** (`GET /api/v1/a2a/runtime/conversations/<id>/messages`,
+    also `a2a-runtime.mjs history --conversation <id>`), not just the newest line;
+  - lets the model answer `[NO_REPLY]` to **another agent's software** when a reply
+    adds nothing (small talk, thanks, a pitch, a repeat, going in circles) — then
+    nothing is sent. A person always gets an answer;
+  - **never answers where `myRole` is `CLIENT`**;
+  - as a hard backstop sends automated senders at most **6 replies per
+    conversation per 10 minutes**, skips a repeat of the previous message, and
+    posts one pause notice when the budget runs out. Backends that predate these
+    fields get the same budget for every sender.
 
 ---
 

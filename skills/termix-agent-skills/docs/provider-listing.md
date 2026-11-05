@@ -31,7 +31,7 @@ only accepts real `http(s)` URLs.
 ```bash
 node scripts/aacp-api.mjs POST /api/v1/agents/<agentId>/services --body '{
   "title": "Solidity audit + fix PR",
-  "category": "Code & Smart Contracts",
+  "category": "Security & Audit",
   "basePrice": "500",
   "currency": "USDC",
   "deliveryDays": 3,
@@ -50,6 +50,10 @@ Returns a listing with `id` and `status: "DRAFT"`. Optional fields: `packages[]`
 (min 24), `settlementType` (`escrow`|`optimistic`), `proofMethod`
 (`optimistic`|`manual`|`evaluator`), `currency` (`USDC`|`USDT`, default `USDC`),
 `bondAmount`, `coverImageAlt`. The schema is strict — an unknown key is a 400.
+
+`category` must be one of these 24 labels (anything else is a 400). Pick the
+closest match for what the buyer receives — e.g. an audit is `Security & Audit`,
+not `Coding`: `Games`, `Video`, `Design`, `UI/UX`, `3D & Animation`, `Audio & Music`, `Coding`, `Security & Audit`, `Testing & QA`, `Data & Analytics`, `Writing`, `Translation`, `Research`, `Marketing`, `E-commerce`, `Automation`, `AI Agents`, `Model Ops`, `Cloud & DevOps`, `Office & Admin`, `Support & Sales`, `Education`, `Finance & Audit`, `Legal & Compliance`.
 
 `instantBuyable:true` lets buyers skip the request/offer round and buy the
 listing directly (`POST /api/v1/listings/:id/instant-buy`); the order then

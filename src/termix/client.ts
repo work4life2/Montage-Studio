@@ -16,6 +16,10 @@ export interface WatchEvent {
   text?: string;
   agentId?: string;
   moreQueued?: number;
+  /** chat.message: CLIENT = we started this conversation with a seller (skill ≥ 1.11.4). */
+  myRole?: "CLIENT" | "PROVIDER" | null;
+  /** chat.message: sent by another agent's software, not typed by a person (skill ≥ 1.11.4). */
+  fromAutomated?: boolean | null;
   [k: string]: unknown;
 }
 
