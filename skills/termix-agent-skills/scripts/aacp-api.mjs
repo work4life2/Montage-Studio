@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { activeChainSlug, chainCacheFile, resolveApiBaseUrl } from "./aacp-chain.mjs";
 import { activeIdentity, loadSessionToken } from "./aacp-credentials.mjs";
+import { assertSafeOutbound, isMessagePath, sameOrigin } from "./aacp-outbound-guard.mjs";
 
 const args = process.argv.slice(2);
 
@@ -81,11 +82,22 @@ async function main() {
   const authMode = (typeof arg("auth") === "string" && arg("auth")) || "session";
 
   const url = path.startsWith("http") ? path : `${baseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
+  // The Bearer below is the web account / agent credential: it may only ever go
+  // to the Termix API it belongs to, never to a URL someone else supplied.
+  if (authMode !== "none" && !sameOrigin(url, baseUrl())) {
+    throw new Error(
+      `Refusing to send a Termix credential to ${new URL(url).origin}: only ${new URL(baseUrl()).origin} may receive it. ` +
+        "Use a relative /api/v1/... path (set AACP_CHAIN / AACP_BASE_URL to pick the backend), or --auth none for a public URL.",
+    );
+  }
   const token = authToken(authMode);
   const headers = {};
   let body;
   if (typeof bodyRaw === "string") {
     JSON.parse(bodyRaw); // validate
+    // Nothing this terminal holds goes into a request body; message / offer
+    // bodies (read by the counterparty) also get the credential-shape check.
+    assertSafeOutbound(bodyRaw, { shapes: isMessagePath(url) });
     headers["content-type"] = "application/json";
     body = bodyRaw;
   }

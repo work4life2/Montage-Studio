@@ -12,8 +12,9 @@
 // matching API (e.g. POST /orders/:id/delivery/artifacts) using s3Key/publicUrl
 // and the file's sha256 (printed here as a convenience).
 //
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { assertSafeOutbound, isCredentialFile } from "./aacp-outbound-guard.mjs";
 
 const args = process.argv.slice(2);
 function arg(name) {
@@ -31,7 +32,13 @@ async function main() {
     process.stderr.write("Usage: node aacp-upload.mjs --url '<presigned>' --file <path> --content-type <mime>\n");
     process.exit(2);
   }
-  const buf = await readFile(file);
+  const real = await realpath(file);
+  if (isCredentialFile(real)) {
+    throw new Error(`Refused to upload ${file}: it is a credential / config file, not a deliverable. Nothing was uploaded.`);
+  }
+  const buf = await readFile(real);
+  // Exact credentials this terminal holds, wherever they hide in the file.
+  if (buf.length <= 20 * 1024 * 1024) assertSafeOutbound(buf.toString("latin1"), { shapes: false, fragments: false });
   const sha256 = "0x" + createHash("sha256").update(buf).digest("hex");
   const headers = {};
   if (typeof contentType === "string") headers["content-type"] = contentType;
